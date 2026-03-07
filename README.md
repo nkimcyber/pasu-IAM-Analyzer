@@ -130,8 +130,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/escalate \
 
 - [x] CLI tool with local + AI analysis
 - [x] PyPI package (`pip install pasu`)
-- [ ] More detection rules (S3 public access, cross-account trust)
-- [ ] Output formats (--format json / table / sarif)
+- [x] More detection rules (S3 public access, cross-account trust)
+- [x] Output formats (--format json / table / sarif)
 - [ ] Azure RBAC / Entra ID support
 - [ ] GCP IAM support
 - [ ] Team dashboard with shared reports
