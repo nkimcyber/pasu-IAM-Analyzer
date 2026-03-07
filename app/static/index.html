@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>IAM Policy Explainer</title>
+  <title>IAM Policy Analyzer</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -18,31 +18,39 @@
       color: #1a202c;
     }
 
-    header {
-      text-align: center;
-      margin-bottom: 40px;
-    }
-
-    header h1 {
-      font-size: 2rem;
-      font-weight: 700;
-      color: #2d3748;
-    }
-
-    header p {
-      margin-top: 8px;
-      font-size: 1rem;
-      color: #718096;
-    }
+    header { text-align: center; margin-bottom: 32px; }
+    header h1 { font-size: 2rem; font-weight: 700; color: #2d3748; }
+    header p { margin-top: 8px; font-size: 1rem; color: #718096; }
 
     .card {
-      background: #ffffff;
+      background: #fff;
       border-radius: 12px;
       box-shadow: 0 4px 20px rgba(0,0,0,0.08);
       padding: 32px;
       width: 100%;
       max-width: 780px;
     }
+
+    /* Tabs */
+    .tabs { display: flex; gap: 4px; margin-bottom: 28px; border-bottom: 2px solid #e2e8f0; }
+    .tab {
+      padding: 10px 24px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      background: none;
+      color: #718096;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .tab:hover { color: #4299e1; }
+    .tab.active { color: #4299e1; border-bottom-color: #4299e1; }
+
+    /* Panel */
+    .panel { display: none; }
+    .panel.active { display: block; }
 
     label {
       display: block;
@@ -57,7 +65,7 @@
     textarea {
       width: 100%;
       height: 220px;
-      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-family: "SFMono-Regular", Consolas, monospace;
       font-size: 0.85rem;
       line-height: 1.6;
       padding: 14px 16px;
@@ -69,23 +77,12 @@
       transition: border-color 0.2s;
       outline: none;
     }
-
     textarea:focus { border-color: #4299e1; background: #fff; }
-
     textarea.error { border-color: #fc8181; }
 
-    .error-msg {
-      margin-top: 6px;
-      font-size: 0.82rem;
-      color: #e53e3e;
-      display: none;
-    }
+    .error-msg { margin-top: 6px; font-size: 0.82rem; color: #e53e3e; display: none; }
 
-    .btn-row {
-      display: flex;
-      gap: 12px;
-      margin-top: 20px;
-    }
+    .btn-row { display: flex; gap: 12px; margin-top: 20px; }
 
     button {
       cursor: pointer;
@@ -96,130 +93,101 @@
       padding: 12px 28px;
       transition: background 0.2s, transform 0.1s;
     }
-
     button:active { transform: scale(0.98); }
 
-    #explainBtn {
-      background: #4299e1;
-      color: #fff;
-      flex: 1;
-    }
+    .btn-primary { background: #4299e1; color: #fff; flex: 1; }
+    .btn-primary:hover { background: #3182ce; }
+    .btn-primary:disabled { background: #a0aec0; cursor: not-allowed; }
+    .btn-secondary { background: #edf2f7; color: #4a5568; }
+    .btn-secondary:hover { background: #e2e8f0; }
 
-    #explainBtn:hover { background: #3182ce; }
-
-    #explainBtn:disabled { background: #a0aec0; cursor: not-allowed; }
-
-    #clearBtn {
-      background: #edf2f7;
-      color: #4a5568;
-    }
-
-    #clearBtn:hover { background: #e2e8f0; }
-
-    /* Result area */
-    #result {
-      margin-top: 32px;
-      display: none;
-    }
-
-    .result-section {
-      margin-bottom: 24px;
-    }
-
+    /* Results */
+    .result { margin-top: 32px; display: none; }
+    .result-section { margin-bottom: 24px; }
     .result-section h2 {
-      font-size: 0.8rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: #718096;
-      margin-bottom: 10px;
+      font-size: 0.8rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: #718096; margin-bottom: 10px;
     }
 
     .summary-box {
-      background: #ebf8ff;
-      border-left: 4px solid #4299e1;
-      border-radius: 6px;
-      padding: 14px 18px;
-      font-size: 1rem;
-      color: #2c5282;
-      line-height: 1.6;
-      font-weight: 500;
+      background: #ebf8ff; border-left: 4px solid #4299e1;
+      border-radius: 6px; padding: 14px 18px;
+      font-size: 1rem; color: #2c5282; line-height: 1.6; font-weight: 500;
     }
 
-    .details-list {
-      list-style: none;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
+    .details-list { list-style: none; display: flex; flex-direction: column; gap: 10px; }
     .details-list li {
-      display: flex;
-      align-items: flex-start;
-      gap: 10px;
-      background: #f7fafc;
-      border-radius: 8px;
-      padding: 12px 16px;
-      font-size: 0.95rem;
-      color: #2d3748;
-      line-height: 1.6;
+      display: flex; align-items: flex-start; gap: 10px;
+      background: #f7fafc; border-radius: 8px; padding: 12px 16px;
+      font-size: 0.95rem; color: #2d3748; line-height: 1.6;
     }
+    .details-list li::before { content: "✦"; color: #4299e1; font-size: 0.75rem; margin-top: 4px; flex-shrink: 0; }
 
-    .details-list li::before {
-      content: "✦";
-      color: #4299e1;
-      font-size: 0.75rem;
-      margin-top: 4px;
-      flex-shrink: 0;
+    /* Risk badge */
+    .risk-badge {
+      display: inline-block; padding: 4px 14px; border-radius: 999px;
+      font-size: 0.85rem; font-weight: 700; margin-bottom: 16px;
+    }
+    .risk-high { background: #fff5f5; color: #c53030; border: 1px solid #fed7d7; }
+    .risk-medium { background: #fffaf0; color: #c05621; border: 1px solid #fbd38d; }
+    .risk-low { background: #f0fff4; color: #276749; border: 1px solid #9ae6b4; }
+
+    /* Finding card */
+    .finding-card {
+      background: #fff5f5; border: 1px solid #fed7d7;
+      border-radius: 8px; padding: 16px 18px; margin-bottom: 12px;
+    }
+    .finding-card .action-name {
+      font-family: monospace; font-size: 0.9rem; font-weight: 700;
+      color: #c53030; margin-bottom: 8px;
+    }
+    .finding-card .explanation { font-size: 0.92rem; color: #2d3748; line-height: 1.6; margin-bottom: 10px; }
+    .finding-card .path-label {
+      font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.06em; color: #718096; margin-bottom: 4px;
+    }
+    .finding-card .path-value {
+      font-family: monospace; font-size: 0.85rem; color: #744210;
+      background: #fffaf0; padding: 6px 10px; border-radius: 4px;
     }
 
     /* Spinner */
     .spinner {
-      display: inline-block;
-      width: 18px;
-      height: 18px;
-      border: 3px solid rgba(255,255,255,0.4);
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-      vertical-align: middle;
-      margin-right: 8px;
+      display: inline-block; width: 18px; height: 18px;
+      border: 3px solid rgba(255,255,255,0.4); border-top-color: #fff;
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+      vertical-align: middle; margin-right: 8px;
     }
-
     @keyframes spin { to { transform: rotate(360deg); } }
 
     /* Error banner */
-    #errorBanner {
-      display: none;
-      margin-top: 20px;
-      background: #fff5f5;
-      border: 1px solid #fed7d7;
-      border-radius: 8px;
-      padding: 14px 18px;
-      color: #c53030;
-      font-size: 0.9rem;
+    .error-banner {
+      display: none; margin-top: 20px;
+      background: #fff5f5; border: 1px solid #fed7d7;
+      border-radius: 8px; padding: 14px 18px;
+      color: #c53030; font-size: 0.9rem;
     }
 
-    footer {
-      margin-top: 40px;
-      font-size: 0.8rem;
-      color: #a0aec0;
-    }
+    footer { margin-top: 40px; font-size: 0.8rem; color: #a0aec0; }
   </style>
 </head>
 <body>
 
   <header>
-    <h1>🔐 IAM Policy Explainer</h1>
-    <p>Paste any AWS IAM policy JSON and get a plain English explanation instantly.</p>
+    <h1>🔐 IAM Policy Analyzer</h1>
+    <p>Paste any AWS IAM policy JSON to explain or check for security risks.</p>
   </header>
 
   <div class="card">
-    <label for="policyInput">Paste your IAM policy JSON</label>
-    <textarea
-      id="policyInput"
-      spellcheck="false"
-      placeholder='{
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('explain')">📖 Explain Policy</button>
+      <button class="tab" onclick="switchTab('escalate')">⚠️ Privilege Escalation Check</button>
+    </div>
+
+    <!-- ── Explain Panel ── -->
+    <div class="panel active" id="panel-explain">
+      <label for="explainInput">Paste your IAM policy JSON</label>
+      <textarea id="explainInput" spellcheck="false" placeholder='{
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -229,23 +197,53 @@
     }
   ]
 }'></textarea>
-    <div class="error-msg" id="jsonError">⚠ Please enter valid JSON before submitting.</div>
-
-    <div class="btn-row">
-      <button id="explainBtn" onclick="explain()">Explain this policy</button>
-      <button id="clearBtn" onclick="clearAll()">Clear</button>
+      <div class="error-msg" id="explainJsonError">⚠ Please enter valid JSON before submitting.</div>
+      <div class="btn-row">
+        <button class="btn-primary" id="explainBtn" onclick="runExplain()">Explain this policy</button>
+        <button class="btn-secondary" onclick="clearPanel('explain')">Clear</button>
+      </div>
+      <div class="error-banner" id="explainError"></div>
+      <div class="result" id="explainResult">
+        <div class="result-section">
+          <h2>Summary</h2>
+          <div class="summary-box" id="explainSummary"></div>
+        </div>
+        <div class="result-section">
+          <h2>What this policy does</h2>
+          <ul class="details-list" id="explainDetails"></ul>
+        </div>
+      </div>
     </div>
 
-    <div id="errorBanner"></div>
-
-    <div id="result">
-      <div class="result-section">
-        <h2>Summary</h2>
-        <div class="summary-box" id="summaryText"></div>
+    <!-- ── Escalation Panel ── -->
+    <div class="panel" id="panel-escalate">
+      <label for="escalateInput">Paste your IAM policy JSON</label>
+      <textarea id="escalateInput" spellcheck="false" placeholder='{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "*"
+    }
+  ]
+}'></textarea>
+      <div class="error-msg" id="escalateJsonError">⚠ Please enter valid JSON before submitting.</div>
+      <div class="btn-row">
+        <button class="btn-primary" id="escalateBtn" onclick="runEscalate()">Check for risks</button>
+        <button class="btn-secondary" onclick="clearPanel('escalate')">Clear</button>
       </div>
-      <div class="result-section">
-        <h2>What this policy does</h2>
-        <ul class="details-list" id="detailsList"></ul>
+      <div class="error-banner" id="escalateError"></div>
+      <div class="result" id="escalateResult">
+        <div class="result-section">
+          <h2>Risk Level</h2>
+          <div id="riskBadge"></div>
+          <div class="summary-box" id="escalateSummary" style="margin-top:0"></div>
+        </div>
+        <div class="result-section" id="findingsSection">
+          <h2>Detected Risks</h2>
+          <div id="findingsList"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -253,50 +251,52 @@
   <footer>Powered by Claude AI · IAM Analyzer MVP</footer>
 
   <script>
+    function switchTab(name) {
+      document.querySelectorAll(".tab").forEach((t, i) => {
+        t.classList.toggle("active", ["explain","escalate"][i] === name);
+      });
+      document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+      document.getElementById("panel-" + name).classList.add("active");
+    }
+
     function isValidJson(str) {
-      try { JSON.parse(str); return true; }
-      catch { return false; }
+      try { JSON.parse(str); return true; } catch { return false; }
     }
 
-    function setLoading(on) {
-      const btn = document.getElementById("explainBtn");
-      if (on) {
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span>Analyzing…';
-      } else {
-        btn.disabled = false;
-        btn.innerHTML = "Explain this policy";
-      }
+    function setLoading(btnId, on, label) {
+      const btn = document.getElementById(btnId);
+      btn.disabled = on;
+      btn.innerHTML = on ? `<span class="spinner"></span>Analyzing…` : label;
     }
 
-    function showError(msg) {
-      const banner = document.getElementById("errorBanner");
-      banner.style.display = "block";
-      banner.textContent = "⚠ " + msg;
+    function showError(id, msg) {
+      const el = document.getElementById(id);
+      el.style.display = "block";
+      el.textContent = "⚠ " + msg;
     }
 
-    function hideError() {
-      document.getElementById("errorBanner").style.display = "none";
+    function clearPanel(name) {
+      document.getElementById(name + "Input").value = "";
+      document.getElementById(name + "Input").classList.remove("error");
+      document.getElementById(name + "JsonError").style.display = "none";
+      document.getElementById(name + "Result").style.display = "none";
+      document.getElementById(name + "Error").style.display = "none";
     }
 
-    async function explain() {
-      const input = document.getElementById("policyInput");
-      const jsonError = document.getElementById("jsonError");
-      const result = document.getElementById("result");
-
-      hideError();
-      result.style.display = "none";
-
+    async function runExplain() {
+      const input = document.getElementById("explainInput");
       const raw = input.value.trim();
+      document.getElementById("explainResult").style.display = "none";
+      document.getElementById("explainError").style.display = "none";
+
       if (!raw || !isValidJson(raw)) {
         input.classList.add("error");
-        jsonError.style.display = "block";
+        document.getElementById("explainJsonError").style.display = "block";
         return;
       }
-
       input.classList.remove("error");
-      jsonError.style.display = "none";
-      setLoading(true);
+      document.getElementById("explainJsonError").style.display = "none";
+      setLoading("explainBtn", true);
 
       try {
         const resp = await fetch("/api/v1/explain", {
@@ -304,49 +304,104 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ policy_json: raw }),
         });
-
         if (!resp.ok) {
           const err = await resp.json();
           const msg = resp.status === 400
-            ? "⚠ This doesn't look like a valid IAM policy. Please paste a JSON policy with a Statement array."
+            ? "This doesn't look like a valid IAM policy. Please paste a JSON policy with a Statement array."
             : (err.detail || "Something went wrong. Please try again.");
-          showError(msg);
+          showError("explainError", msg);
           return;
         }
-
         const data = await resp.json();
-
-        document.getElementById("summaryText").textContent = data.summary;
-
-        const list = document.getElementById("detailsList");
+        document.getElementById("explainSummary").textContent = data.summary;
+        const list = document.getElementById("explainDetails");
         list.innerHTML = "";
         data.details.forEach(item => {
           const li = document.createElement("li");
           li.textContent = item;
           list.appendChild(li);
         });
-
-        result.style.display = "block";
-        result.scrollIntoView({ behavior: "smooth", block: "start" });
-
+        document.getElementById("explainResult").style.display = "block";
+        document.getElementById("explainResult").scrollIntoView({ behavior: "smooth" });
       } catch (e) {
-        showError("Network error. Is the server running?");
+        showError("explainError", "Network error. Is the server running?");
       } finally {
-        setLoading(false);
+        setLoading("explainBtn", false, "Explain this policy");
       }
     }
 
-    function clearAll() {
-      document.getElementById("policyInput").value = "";
-      document.getElementById("policyInput").classList.remove("error");
-      document.getElementById("jsonError").style.display = "none";
-      document.getElementById("result").style.display = "none";
-      hideError();
+    async function runEscalate() {
+      const input = document.getElementById("escalateInput");
+      const raw = input.value.trim();
+      document.getElementById("escalateResult").style.display = "none";
+      document.getElementById("escalateError").style.display = "none";
+
+      if (!raw || !isValidJson(raw)) {
+        input.classList.add("error");
+        document.getElementById("escalateJsonError").style.display = "block";
+        return;
+      }
+      input.classList.remove("error");
+      document.getElementById("escalateJsonError").style.display = "none";
+      setLoading("escalateBtn", true);
+
+      try {
+        const resp = await fetch("/api/v1/escalate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ policy_json: raw }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json();
+          const msg = resp.status === 400
+            ? "This doesn't look like a valid IAM policy. Please paste a JSON policy with a Statement array."
+            : (err.detail || "Something went wrong. Please try again.");
+          showError("escalateError", msg);
+          return;
+        }
+        const data = await resp.json();
+
+        // Risk badge
+        const badge = document.getElementById("riskBadge");
+        const cls = { High: "risk-high", Medium: "risk-medium", Low: "risk-low" }[data.risk_level] || "risk-low";
+        badge.innerHTML = `<span class="risk-badge ${cls}">Risk Level: ${data.risk_level}</span>`;
+
+        document.getElementById("escalateSummary").textContent = data.summary;
+
+        // Findings
+        const findingsSection = document.getElementById("findingsSection");
+        const findingsList = document.getElementById("findingsList");
+        findingsList.innerHTML = "";
+
+        if (data.findings.length === 0) {
+          findingsSection.style.display = "none";
+        } else {
+          findingsSection.style.display = "block";
+          data.findings.forEach(f => {
+            findingsList.innerHTML += `
+              <div class="finding-card">
+                <div class="action-name">${f.action}</div>
+                <div class="explanation">${f.explanation}</div>
+                <div class="path-label">Escalation Path</div>
+                <div class="path-value">${f.escalation_path}</div>
+              </div>`;
+          });
+        }
+
+        document.getElementById("escalateResult").style.display = "block";
+        document.getElementById("escalateResult").scrollIntoView({ behavior: "smooth" });
+      } catch (e) {
+        showError("escalateError", "Network error. Is the server running?");
+      } finally {
+        setLoading("escalateBtn", false, "Check for risks");
+      }
     }
 
-    // Allow Ctrl+Enter to submit
-    document.getElementById("policyInput").addEventListener("keydown", e => {
-      if (e.ctrlKey && e.key === "Enter") explain();
+    document.getElementById("explainInput").addEventListener("keydown", e => {
+      if (e.ctrlKey && e.key === "Enter") runExplain();
+    });
+    document.getElementById("escalateInput").addEventListener("keydown", e => {
+      if (e.ctrlKey && e.key === "Enter") runEscalate();
     });
   </script>
 

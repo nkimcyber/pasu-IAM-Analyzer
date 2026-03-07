@@ -495,4 +495,135 @@ class TestIndexEndpoint:
         response = client.get("/")
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
-        assert "IAM Policy Explainer" in response.text
+        assert "IAM Policy Analyzer" in response.text
+
+
+# ── escalate_policy Tests ─────────────────────────────────────────────────────
+
+RISKY_POLICY_JSON = json.dumps({
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": "iam:PassRole",
+            "Resource": "*",
+        }
+    ],
+})
+
+SAFE_POLICY_JSON = json.dumps({
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::my-bucket/*",
+        }
+    ],
+})
+
+MOCK_ESCALATION_RESPONSE = {
+    "summary": "This policy contains a high privilege escalation risk.",
+    "findings": [
+        {
+            "action": "iam:passrole",
+            "explanation": "Allows passing roles to AWS services which can lead to privilege escalation.",
+            "escalation_path": "User → PassRole → EC2 → Admin Role",
+        }
+    ],
+}
+
+
+class TestEscalatePolicy:
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.analyzer.anthropic.Anthropic")
+    def test_returns_high_risk_for_risky_policy(self, mock_anthropic_cls):
+        mock_content = MagicMock()
+        mock_content.text = json.dumps(MOCK_ESCALATION_RESPONSE)
+        mock_response = MagicMock()
+        mock_response.content = [mock_content]
+        mock_anthropic_cls.return_value.messages.create.return_value = mock_response
+
+        from app.analyzer import escalate_policy
+        result = escalate_policy(RISKY_POLICY_JSON)
+
+        assert result.risk_level == "High"
+        assert len(result.detected_actions) > 0
+        assert len(result.findings) > 0
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    def test_returns_low_risk_without_api_call_for_safe_policy(self):
+        from app.analyzer import escalate_policy
+        result = escalate_policy(SAFE_POLICY_JSON)
+
+        assert result.risk_level == "Low"
+        assert result.detected_actions == []
+        assert result.findings == []
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_raises_if_api_key_missing(self):
+        from app.analyzer import escalate_policy
+        with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+            escalate_policy(RISKY_POLICY_JSON)
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    def test_raises_on_invalid_json(self):
+        from app.analyzer import escalate_policy
+        with pytest.raises(ValueError, match="Invalid JSON"):
+            escalate_policy("not json")
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    def test_raises_on_non_iam_json(self):
+        from app.analyzer import escalate_policy
+        with pytest.raises(ValueError):
+            escalate_policy(json.dumps({"text": "who are you?"}))
+
+
+# ── /api/v1/escalate Endpoint Tests ──────────────────────────────────────────
+
+class TestEscalateEndpoint:
+    @patch("app.main.escalate_policy")
+    def test_escalate_returns_200(self, mock_escalate, client):
+        from app.models import EscalationFinding, EscalationResult
+        mock_escalate.return_value = EscalationResult(
+            risk_level="High",
+            detected_actions=["iam:passrole"],
+            findings=[
+                EscalationFinding(
+                    action="iam:passrole",
+                    explanation="Can be used to escalate privileges.",
+                    escalation_path="User → PassRole → EC2 → Admin Role",
+                )
+            ],
+            summary="High risk detected.",
+        )
+        response = client.post(
+            "/api/v1/escalate",
+            json={"policy_json": RISKY_POLICY_JSON},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["risk_level"] == "High"
+        assert len(data["findings"]) == 1
+
+    def test_escalate_returns_422_on_missing_field(self, client):
+        response = client.post("/api/v1/escalate", json={})
+        assert response.status_code == 422
+
+    @patch("app.main.escalate_policy")
+    def test_escalate_returns_400_on_invalid_json(self, mock_escalate, client):
+        mock_escalate.side_effect = ValueError("Invalid JSON provided.")
+        response = client.post(
+            "/api/v1/escalate",
+            json={"policy_json": "not json"},
+        )
+        assert response.status_code == 400
+
+    @patch("app.main.escalate_policy")
+    def test_escalate_returns_500_on_runtime_error(self, mock_escalate, client):
+        mock_escalate.side_effect = RuntimeError("Claude escalation check failed")
+        response = client.post(
+            "/api/v1/escalate",
+            json={"policy_json": RISKY_POLICY_JSON},
+        )
+        assert response.status_code == 500
