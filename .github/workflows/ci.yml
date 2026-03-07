@@ -28,14 +28,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
 
       - name: Run tests and capture output
         id: run_tests
         # Always continue so the debug job can receive the output
         continue-on-error: true
         run: |
-          pytest tests/ \
+          python -m pytest tests/ \
             --tb=short \
             --no-header \
             -q \
@@ -74,7 +74,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
 
       - name: Download pytest output
         uses: actions/download-artifact@v4
@@ -115,10 +115,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
 
       - name: Confirm all tests pass (final gate)
-        run: pytest tests/ --tb=short -q
+        run: python -m pytest tests/ --tb=short -q
 
       - name: Archive reviewed source
         uses: actions/upload-artifact@v4
