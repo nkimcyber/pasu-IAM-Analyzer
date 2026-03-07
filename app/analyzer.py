@@ -16,7 +16,7 @@ from app.models import AnalysisResult, EscalationFinding, EscalationResult, Expl
 logger = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
-MAX_TOKENS = 1024
+MAX_TOKENS = 4096
 
 # ── Risk action lists ─────────────────────────────────────────────────────────
 
@@ -206,6 +206,136 @@ def _detect_risky_actions(allowed_actions: set[str]) -> tuple[list[str], str]:
         risk_level = "Low"
 
     return detected, risk_level
+
+
+# ── Local (no-API) Functions ──────────────────────────────────────────────────
+
+def explain_policy_local(policy_json: str) -> ExplainResult:
+    """Generate a rule-based plain-English explanation with no Claude API call.
+
+    Args:
+        policy_json: Raw IAM policy JSON string.
+
+    Returns:
+        ExplainResult with a summary and per-statement details.
+
+    Raises:
+        ValueError: If policy_json is not valid JSON or not a valid IAM policy.
+    """
+    try:
+        parsed = json.loads(policy_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid JSON provided.") from exc
+
+    validate_iam_policy(parsed)
+
+    details: list[str] = []
+    has_allow_all = False
+
+    for stmt in parsed["Statement"]:
+        effect = stmt.get("Effect", "Allow")
+        actions = stmt.get("Action", [])
+        if isinstance(actions, str):
+            actions = [actions]
+        resources = stmt.get("Resource", [])
+        if isinstance(resources, str):
+            resources = [resources]
+
+        all_actions = "*" in actions
+        all_resources = "*" in resources
+
+        if effect == "Allow" and all_actions and all_resources:
+            has_allow_all = True
+            details.append(
+                "Allows full access to all AWS services and all resources "
+                "(administrator-level access)."
+            )
+        elif effect == "Allow" and all_actions:
+            resource_desc = ", ".join(resources[:3])
+            details.append(f"Allows all AWS actions on: {resource_desc}.")
+        elif effect == "Allow":
+            services = sorted({a.split(":")[0] for a in actions if ":" in a})
+            resource_desc = "all resources" if all_resources else ", ".join(resources[:2])
+            if services:
+                details.append(
+                    f"Allows {', '.join(services)} actions on {resource_desc}."
+                )
+            else:
+                details.append(
+                    f"Allows {', '.join(actions[:3])} on {resource_desc}."
+                )
+        else:  # Deny
+            services = sorted({a.split(":")[0] for a in actions if ":" in a})
+            if all_actions and all_resources:
+                details.append("Explicitly denies all AWS actions on all resources.")
+            elif services:
+                details.append(f"Explicitly denies {', '.join(services)} actions.")
+            else:
+                details.append(f"Explicitly denies: {', '.join(actions[:3])}.")
+
+    if has_allow_all:
+        summary = (
+            "This policy grants full administrator-level access to all AWS "
+            "services and resources."
+        )
+    elif len(details) == 1:
+        summary = details[0]
+    else:
+        effects = {s.get("Effect") for s in parsed["Statement"]}
+        if effects == {"Allow"}:
+            summary = (
+                f"This policy allows access across {len(details)} statement(s)."
+            )
+        else:
+            summary = (
+                f"This policy has {len(details)} statement(s) with mixed "
+                "Allow/Deny effects."
+            )
+
+    return ExplainResult(summary=summary, details=details)
+
+
+def escalate_policy_local(policy_json: str) -> EscalationResult:
+    """Run local rule-based privilege escalation detection with no Claude API call.
+
+    Args:
+        policy_json: Raw IAM policy JSON string.
+
+    Returns:
+        EscalationResult with risk level and detected actions; findings is always [].
+
+    Raises:
+        ValueError: If policy_json is not valid JSON or not a valid IAM policy.
+    """
+    try:
+        parsed = json.loads(policy_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid JSON provided.") from exc
+
+    validate_iam_policy(parsed)
+
+    allowed_actions = _extract_allowed_actions(parsed)
+    detected, risk_level = _detect_risky_actions(allowed_actions)
+
+    if not detected:
+        summary = "No privilege escalation risks detected in this policy."
+    elif risk_level == "High":
+        summary = (
+            f"High privilege escalation risk: {len(detected)} dangerous action(s) "
+            "detected. Run with --ai for detailed analysis."
+        )
+    else:
+        summary = (
+            f"Medium privilege escalation risk: {len(detected)} sensitive action(s) "
+            "detected. Run with --ai for detailed analysis."
+        )
+
+    return EscalationResult(
+        risk_level=risk_level,
+        detected_actions=detected,
+        findings=[],
+        summary=summary,
+    )
 
 
 # ── Core Functions ────────────────────────────────────────────────────────────
