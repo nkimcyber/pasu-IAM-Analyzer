@@ -2,9 +2,9 @@
 cli.py — Command-line interface for the IAM Analyzer.
 
 Usage:
-    pasu explain  --file policy.json
-    pasu escalate --file policy.json
-    pasu scan     --file policy.json
+    pasu explain  --file policy.json [--format json]
+    pasu escalate --file policy.json [--format json]
+    pasu scan     --file policy.json [--format json]
 """
 
 import argparse
@@ -18,6 +18,7 @@ from app.analyzer import (
     HIGH_RISK_ACTIONS,
     MEDIUM_RISK_ACTIONS,
     STRUCTURAL_RULE_COUNT,
+    analyze_policy_rules,
     escalate_policy,
     escalate_policy_local,
     explain_policy,
@@ -89,18 +90,6 @@ def _print_banner() -> None:
     Y = "\033[33m"   # yellow — tagline
     D = "\033[2m"    # dim    — version / rule count
 
-    # Guardian gate design — 7 lines, 28 chars wide, pure ASCII
-    #
-    #   ============================
-    #   ||        P A S U         ||
-    #   ||                        ||
-    #   ||======+          +======||
-    #   ||      |          |      ||
-    #   ||      |          |      ||
-    #   ============================
-    #     pasu v0.1.0  Cloud IAM Security Guard
-    #     [ 12 rules · 10 high · 2 medium ]
-
     gate = [
         f"{C}============================{R}",
         f"{C}||        {R}{B}P A S U{R}{C}         ||{R}",
@@ -121,21 +110,50 @@ def _print_banner() -> None:
 # ── File loading ──────────────────────────────────────────────────────────────
 
 def _load_policy(path: str) -> str:
+    """Load and validate policy JSON from disk.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file is not valid JSON.
+    """
     try:
         with open(path, encoding="utf-8") as fh:
             content = fh.read()
-        # Validate it is parseable JSON before sending
         json.loads(content)
         return content
     except FileNotFoundError:
-        print(_color(f"Error: file not found: {path}", _RED), file=sys.stderr)
-        sys.exit(1)
+        raise FileNotFoundError(f"file not found: {path}")
     except json.JSONDecodeError as exc:
-        print(_color(f"Error: file is not valid JSON: {exc}", _RED), file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f"file is not valid JSON: {exc}")
 
 
-# ── Output formatters ─────────────────────────────────────────────────────────
+# ── Error handling ─────────────────────────────────────────────────────────────
+
+def _handle_error(message: str, use_json: bool) -> None:
+    """Print an error and exit with code 1.
+
+    JSON mode: writes {"error": ..., "status": "error"} to stdout.
+    Text mode: writes a red error message to stderr.
+    """
+    if use_json:
+        print(json.dumps({"error": message, "status": "error"}, indent=2))
+    else:
+        print(_color(f"Error: {message}", _RED), file=sys.stderr)
+    sys.exit(1)
+
+
+# ── API key guard ─────────────────────────────────────────────────────────────
+
+def _require_api_key(use_json: bool = False) -> None:
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        _handle_error(
+            "ANTHROPIC_API_KEY environment variable is required for AI analysis. "
+            "Run without --ai for local-only analysis.",
+            use_json,
+        )
+
+
+# ── Text output formatters ────────────────────────────────────────────────────
 
 def _print_explain(result) -> None:
     print(_header("IAM Policy Explanation"))
@@ -173,71 +191,120 @@ def _print_scan(explain_result, escalate_result) -> None:
     _print_escalate(escalate_result)
 
 
-# ── API key guard ─────────────────────────────────────────────────────────────
+# ── JSON output formatters ────────────────────────────────────────────────────
 
-def _require_api_key() -> None:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print(
-            "Error: ANTHROPIC_API_KEY environment variable is required for AI analysis. "
-            "Run without --ai for local-only analysis.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+def _explain_to_json(result) -> dict:
+    return {
+        "summary": result.summary,
+        "details": result.details,
+        "status": "success",
+    }
+
+
+def _escalate_to_json(result, rule_findings) -> dict:
+    return {
+        "risk_level": result.risk_level,
+        "detected_actions": result.detected_actions,
+        "findings": [f.model_dump() for f in result.findings],
+        "rule_findings": [f.model_dump() for f in rule_findings],
+        "summary": result.summary,
+        "status": "success",
+    }
+
+
+def _scan_to_json(explain_result, escalate_result, rule_findings) -> dict:
+    return {
+        "explain": _explain_to_json(explain_result),
+        "escalate": _escalate_to_json(escalate_result, rule_findings),
+        "status": "success",
+    }
 
 
 # ── Command handlers ──────────────────────────────────────────────────────────
 
 def cmd_explain(args: argparse.Namespace) -> None:
-    policy_json = _load_policy(args.file)
+    use_json = args.format == "json"
+    try:
+        policy_json = _load_policy(args.file)
+    except (FileNotFoundError, ValueError) as exc:
+        _handle_error(str(exc), use_json)
+        return
+
     try:
         if args.ai:
-            _require_api_key()
+            _require_api_key(use_json)
             result = explain_policy(policy_json=policy_json)
         else:
             result = explain_policy_local(policy_json=policy_json)
     except ValueError as exc:
-        print(_color(f"Validation error: {exc}", _RED), file=sys.stderr)
-        sys.exit(1)
+        _handle_error(f"Validation error: {exc}", use_json)
+        return
     except RuntimeError as exc:
-        print(_color(f"Error: {exc}", _RED), file=sys.stderr)
-        sys.exit(1)
-    _print_explain(result)
+        _handle_error(str(exc), use_json)
+        return
+
+    if use_json:
+        print(json.dumps(_explain_to_json(result), indent=2))
+    else:
+        _print_explain(result)
 
 
 def cmd_escalate(args: argparse.Namespace) -> None:
-    policy_json = _load_policy(args.file)
+    use_json = args.format == "json"
+    try:
+        policy_json = _load_policy(args.file)
+    except (FileNotFoundError, ValueError) as exc:
+        _handle_error(str(exc), use_json)
+        return
+
     try:
         if args.ai:
-            _require_api_key()
+            _require_api_key(use_json)
             result = escalate_policy(policy_json=policy_json)
         else:
             result = escalate_policy_local(policy_json=policy_json)
+        rule_findings = analyze_policy_rules(policy_json) if use_json else []
     except ValueError as exc:
-        print(_color(f"Validation error: {exc}", _RED), file=sys.stderr)
-        sys.exit(1)
+        _handle_error(f"Validation error: {exc}", use_json)
+        return
     except RuntimeError as exc:
-        print(_color(f"Error: {exc}", _RED), file=sys.stderr)
-        sys.exit(1)
-    _print_escalate(result)
+        _handle_error(str(exc), use_json)
+        return
+
+    if use_json:
+        print(json.dumps(_escalate_to_json(result, rule_findings), indent=2))
+    else:
+        _print_escalate(result)
 
 
 def cmd_scan(args: argparse.Namespace) -> None:
-    policy_json = _load_policy(args.file)
+    use_json = args.format == "json"
+    try:
+        policy_json = _load_policy(args.file)
+    except (FileNotFoundError, ValueError) as exc:
+        _handle_error(str(exc), use_json)
+        return
+
     try:
         if args.ai:
-            _require_api_key()
+            _require_api_key(use_json)
             explain_result = explain_policy(policy_json=policy_json)
             escalate_result = escalate_policy(policy_json=policy_json)
         else:
             explain_result = explain_policy_local(policy_json=policy_json)
             escalate_result = escalate_policy_local(policy_json=policy_json)
+        rule_findings = analyze_policy_rules(policy_json) if use_json else []
     except ValueError as exc:
-        print(_color(f"Validation error: {exc}", _RED), file=sys.stderr)
-        sys.exit(1)
+        _handle_error(f"Validation error: {exc}", use_json)
+        return
     except RuntimeError as exc:
-        print(_color(f"Error: {exc}", _RED), file=sys.stderr)
-        sys.exit(1)
-    _print_scan(explain_result, escalate_result)
+        _handle_error(str(exc), use_json)
+        return
+
+    if use_json:
+        print(json.dumps(_scan_to_json(explain_result, escalate_result, rule_findings), indent=2))
+    else:
+        _print_scan(explain_result, escalate_result)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -262,6 +329,12 @@ def main() -> None:
         default=False,
         help="Use Claude AI for analysis (requires ANTHROPIC_API_KEY).",
     )
+    _format_kwargs = dict(
+        choices=["text", "json"],
+        default="text",
+        metavar="FORMAT",
+        help="Output format: 'text' (default) or 'json' (machine-readable, suppresses banner).",
+    )
 
     # explain
     p_explain = subparsers.add_parser(
@@ -271,6 +344,7 @@ def main() -> None:
     p_explain.add_argument("--file", required=True, metavar="FILE",
                            help="Path to the IAM policy JSON file.")
     p_explain.add_argument("--ai", **_ai_kwargs)
+    p_explain.add_argument("--format", **_format_kwargs)
     p_explain.set_defaults(func=cmd_explain)
 
     # escalate
@@ -281,6 +355,7 @@ def main() -> None:
     p_escalate.add_argument("--file", required=True, metavar="FILE",
                             help="Path to the IAM policy JSON file.")
     p_escalate.add_argument("--ai", **_ai_kwargs)
+    p_escalate.add_argument("--format", **_format_kwargs)
     p_escalate.set_defaults(func=cmd_escalate)
 
     # scan
@@ -291,10 +366,12 @@ def main() -> None:
     p_scan.add_argument("--file", required=True, metavar="FILE",
                         help="Path to the IAM policy JSON file.")
     p_scan.add_argument("--ai", **_ai_kwargs)
+    p_scan.add_argument("--format", **_format_kwargs)
     p_scan.set_defaults(func=cmd_scan)
 
     args = parser.parse_args()
-    if not args.quiet:
+    # Banner is suppressed in JSON mode (clean stdout) and when -q/--quiet is set
+    if not args.quiet and args.format != "json":
         _print_banner()
     args.func(args)
 

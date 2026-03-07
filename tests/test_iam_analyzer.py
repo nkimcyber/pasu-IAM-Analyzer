@@ -7,10 +7,27 @@ Covers:
 - analyzer.analyze_policy (mocked boto3 + Claude)
 - analyzer.explain_policy (mocked Claude)
 - FastAPI endpoints via TestClient
+- CLI --format json output
 """
 
+import argparse
+import contextlib
+import io
 import json
+import sys
 from unittest.mock import MagicMock, patch
+
+
+@contextlib.contextmanager
+def _capture_stdout():
+    """Replace sys.stdout with a StringIO buffer for the duration of the block."""
+    buf = io.StringIO()
+    old = sys.stdout
+    sys.stdout = buf
+    try:
+        yield buf
+    finally:
+        sys.stdout = old
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1187,3 +1204,136 @@ class TestExplainPolicyLocal:
         from app.analyzer import explain_policy_local
         with pytest.raises(ValueError):
             explain_policy_local(json.dumps({"Version": "2012-10-17"}))
+
+
+# ── CLI --format json tests ───────────────────────────────────────────────────
+
+_SIMPLE_POLICY = json.dumps({
+    "Version": "2012-10-17",
+    "Statement": [{"Effect": "Allow", "Action": "s3:GetObject",
+                   "Resource": "arn:aws:s3:::my-bucket/*"}],
+})
+
+_RISKY_POLICY = json.dumps({
+    "Version": "2012-10-17",
+    "Statement": [{"Effect": "Allow", "Action": "iam:PassRole", "Resource": "*"}],
+})
+
+
+def _make_args(tmp_path, command, policy_text, fmt="json", ai=False):
+    """Write a policy file and return an argparse.Namespace for the command."""
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(policy_text)
+    return argparse.Namespace(file=str(policy_file), ai=ai, format=fmt)
+
+
+class TestCliJsonOutput:
+    """--format json produces valid, parseable JSON with correct keys."""
+
+    def test_explain_json_has_required_keys(self, tmp_path):
+        from app.cli import cmd_explain
+        args = _make_args(tmp_path, "explain", _SIMPLE_POLICY)
+        with _capture_stdout() as buf:
+            cmd_explain(args)
+        data = json.loads(buf.getvalue())
+        assert data["status"] == "success"
+        assert "summary" in data
+        assert isinstance(data["details"], list)
+
+    def test_escalate_json_has_required_keys(self, tmp_path):
+        from app.cli import cmd_escalate
+        args = _make_args(tmp_path, "escalate", _RISKY_POLICY)
+        with _capture_stdout() as buf:
+            cmd_escalate(args)
+        data = json.loads(buf.getvalue())
+        assert data["status"] == "success"
+        assert "risk_level" in data
+        assert "detected_actions" in data
+        assert "findings" in data
+        assert "rule_findings" in data
+        assert "summary" in data
+
+    def test_scan_json_has_nested_explain_and_escalate(self, tmp_path):
+        from app.cli import cmd_scan
+        args = _make_args(tmp_path, "scan", _SIMPLE_POLICY)
+        with _capture_stdout() as buf:
+            cmd_scan(args)
+        data = json.loads(buf.getvalue())
+        assert data["status"] == "success"
+        assert data["explain"]["status"] == "success"
+        assert data["escalate"]["status"] == "success"
+        # jq-style access: .escalate.risk_level
+        assert data["escalate"]["risk_level"] in ("High", "Medium", "Low")
+
+    def test_escalate_json_rule_findings_populated_for_risky_policy(self, tmp_path):
+        from app.cli import cmd_escalate
+        args = _make_args(tmp_path, "escalate", _RISKY_POLICY)
+        with _capture_stdout() as buf:
+            cmd_escalate(args)
+        data = json.loads(buf.getvalue())
+        assert len(data["rule_findings"]) > 0
+        rf = data["rule_findings"][0]
+        assert "rule_id" in rf
+        assert "severity" in rf
+        assert "title" in rf
+        assert "description" in rf
+        assert "statement_index" in rf
+
+    def test_escalate_json_rule_findings_empty_for_safe_policy(self, tmp_path):
+        from app.cli import cmd_escalate
+        args = _make_args(tmp_path, "escalate", _SIMPLE_POLICY)
+        with _capture_stdout() as buf:
+            cmd_escalate(args)
+        data = json.loads(buf.getvalue())
+        assert data["rule_findings"] == []
+
+    def test_scan_json_is_jq_parseable(self, tmp_path):
+        """Output must contain no ANSI codes, banner text, or decorations."""
+        from app.cli import cmd_scan
+        args = _make_args(tmp_path, "scan", _RISKY_POLICY)
+        with _capture_stdout() as buf:
+            cmd_scan(args)
+        raw = buf.getvalue()
+        # If any ANSI escape codes leaked in, this would raise
+        data = json.loads(raw)
+        assert data is not None
+        # Ensure no ANSI codes in any string values (recursive check on summary)
+        assert "\033[" not in data["explain"]["summary"]
+        assert "\033[" not in data["escalate"]["summary"]
+
+    def test_json_error_on_missing_file(self, tmp_path):
+        from app.cli import cmd_explain
+        args = argparse.Namespace(
+            file=str(tmp_path / "nonexistent.json"), ai=False, format="json"
+        )
+        with _capture_stdout() as buf:
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_explain(args)
+        assert exc_info.value.code == 1
+        data = json.loads(buf.getvalue())
+        assert data["status"] == "error"
+        assert "error" in data
+        assert "file not found" in data["error"]
+
+    def test_json_error_on_invalid_json_file(self, tmp_path):
+        from app.cli import cmd_escalate
+        bad_file = tmp_path / "bad.json"
+        bad_file.write_text("this is not json")
+        args = argparse.Namespace(file=str(bad_file), ai=False, format="json")
+        with _capture_stdout() as buf:
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_escalate(args)
+        assert exc_info.value.code == 1
+        data = json.loads(buf.getvalue())
+        assert data["status"] == "error"
+
+    def test_text_format_does_not_produce_json(self, tmp_path):
+        """--format text (default) must not output a JSON object."""
+        from app.cli import cmd_explain
+        args = _make_args(tmp_path, "explain", _SIMPLE_POLICY, fmt="text")
+        with _capture_stdout() as buf:
+            cmd_explain(args)
+        raw = buf.getvalue()
+        # Text output is not a JSON object
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(raw)
