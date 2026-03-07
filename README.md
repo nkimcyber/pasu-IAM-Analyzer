@@ -141,6 +141,38 @@ Pasu (파수/把守) is Korean for "guard" or "sentinel" — as in 파수꾼 (gu
 
 ---
 
+## CI/CD Integration
+
+### JSON output for scripting
+
+Use `--format json` to pipe results into other tools:
+
+```bash
+# Extract just the risk level
+pasu scan --file policy.json --format json | jq '.escalate.risk_level'
+
+# List all detected risky actions
+pasu scan --file policy.json --format json | jq '.escalate.detected_actions[]'
+
+# Fail CI if risk level is High
+RISK=$(pasu scan --file policy.json --format json | jq -r '.escalate.risk_level')
+[ "$RISK" = "High" ] && exit 1 || exit 0
+```
+
+### SARIF output for GitHub Code Scanning
+
+Use `--format sarif` to generate a [SARIF v2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/) report that GitHub understands natively:
+
+```bash
+pasu scan --file policy.json --format sarif > results.sarif
+```
+
+Upload the `.sarif` file with the `github/codeql-action/upload-sarif` action and findings will appear in the **Security → Code scanning** tab of your repository, with severity levels mapped automatically (`High` → error, `Medium` → warning).
+
+See [examples/github-actions-workflow.yml](examples/github-actions-workflow.yml) for a ready-to-use GitHub Actions workflow.
+
+---
+
 ## Contributing
 
 Contributions are welcome. Please open an issue first to discuss what you'd like to change.
