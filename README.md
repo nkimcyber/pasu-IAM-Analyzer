@@ -28,6 +28,8 @@ Summary:
 ### Dangerous policy detection
 ![Pasu Demo - Dangerous Policy](docs/demo1.gif)
 
+### Auto-fix dangerous policies
+![Pasu Demo - Fix Policy](docs/demo3.gif)
 ---
 
 ## Install
@@ -146,7 +148,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/escalate \
 - [x] PyPI package (`pip install pasu`)
 - [x] More detection rules (S3 public access, cross-account trust)
 - [x] Output formats (--format json / table / sarif)
-- [ ] `pasu fix` — auto-generate least-privilege replacement policies
+- [x] `pasu fix` — auto-generate least-privilege replacement policies
 - [ ] Azure RBAC / Entra ID support
 - [ ] GCP IAM support
 - [ ] Team dashboard with shared reports
