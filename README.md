@@ -22,6 +22,11 @@ Summary:
   High privilege escalation risk: 3 dangerous action(s) detected.
   Run with --ai for detailed analysis.
 ```
+### Mixed policy analysis
+![Pasu Demo - S3 Policy](docs/demo2.gif)
+
+### Dangerous policy detection
+![Pasu Demo - Dangerous Policy](docs/demo1.gif)
 
 ---
 
