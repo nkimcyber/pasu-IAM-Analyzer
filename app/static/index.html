@@ -307,7 +307,10 @@
 
         if (!resp.ok) {
           const err = await resp.json();
-          showError(err.detail || "Something went wrong. Please try again.");
+          const msg = resp.status === 400
+            ? "⚠ This doesn't look like a valid IAM policy. Please paste a JSON policy with a Statement array."
+            : (err.detail || "Something went wrong. Please try again.");
+          showError(msg);
           return;
         }
 

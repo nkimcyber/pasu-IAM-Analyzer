@@ -99,6 +99,34 @@ def analyze_policy(policy_arn: str, account_id: str) -> AnalysisResult:
     return AnalysisResult(policy_arn=policy_arn, findings=findings)
 
 
+def validate_iam_policy(policy: dict) -> None:
+    """Validate that a parsed dict looks like a real IAM policy.
+
+    Args:
+        policy: Parsed IAM policy dict.
+
+    Raises:
+        ValueError: If the structure does not match a valid IAM policy.
+    """
+    if "Statement" not in policy:
+        raise ValueError("Missing required field: 'Statement'.")
+
+    if not isinstance(policy["Statement"], list) or len(policy["Statement"]) == 0:
+        raise ValueError("'Statement' must be a non-empty array.")
+
+    for i, stmt in enumerate(policy["Statement"]):
+        if not isinstance(stmt, dict):
+            raise ValueError(f"Statement[{i}] must be an object.")
+        if "Effect" not in stmt:
+            raise ValueError(f"Statement[{i}] is missing required field: 'Effect'.")
+        if stmt["Effect"] not in ("Allow", "Deny"):
+            raise ValueError(f"Statement[{i}] 'Effect' must be 'Allow' or 'Deny'.")
+        if "Action" not in stmt and "NotAction" not in stmt:
+            raise ValueError(f"Statement[{i}] is missing required field: 'Action'.")
+        if "Resource" not in stmt and "NotResource" not in stmt:
+            raise ValueError(f"Statement[{i}] is missing required field: 'Resource'.")
+
+
 def explain_policy(policy_json: str) -> ExplainResult:
     """Explain a pasted IAM policy JSON in plain English.
 
@@ -117,9 +145,11 @@ def explain_policy(policy_json: str) -> ExplainResult:
         raise RuntimeError("ANTHROPIC_API_KEY environment variable is not set.")
 
     try:
-        json.loads(policy_json)
+        parsed_input = json.loads(policy_json)
     except json.JSONDecodeError as exc:
         raise ValueError("Invalid JSON provided.") from exc
+
+    validate_iam_policy(parsed_input)
 
     client = anthropic.Anthropic(api_key=api_key)
     try:
@@ -139,6 +169,13 @@ def explain_policy(policy_json: str) -> ExplainResult:
         raise RuntimeError("Claude explain failed") from exc
 
     raw = response.content[0].text.strip()
+
+    # Strip markdown code fences if Claude wraps the JSON
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
 
     try:
         parsed = json.loads(raw)

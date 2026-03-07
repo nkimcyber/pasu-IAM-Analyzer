@@ -341,6 +341,48 @@ class TestExplainPolicy:
             explain_policy("this is not json")
 
     @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    def test_raises_on_missing_statement(self):
+        from app.analyzer import explain_policy
+        with pytest.raises(ValueError, match="Statement"):
+            explain_policy(json.dumps({"Version": "2012-10-17"}))
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    def test_raises_on_empty_statement(self):
+        from app.analyzer import explain_policy
+        with pytest.raises(ValueError, match="non-empty"):
+            explain_policy(json.dumps({"Statement": []}))
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    def test_raises_on_missing_effect(self):
+        from app.analyzer import explain_policy
+        with pytest.raises(ValueError, match="Effect"):
+            explain_policy(json.dumps({
+                "Statement": [{"Action": "s3:GetObject", "Resource": "*"}]
+            }))
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    def test_raises_on_invalid_effect(self):
+        from app.analyzer import explain_policy
+        with pytest.raises(ValueError, match="Allow.*Deny|Deny.*Allow"):
+            explain_policy(json.dumps({
+                "Statement": [{"Effect": "Yes", "Action": "s3:GetObject", "Resource": "*"}]
+            }))
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    def test_raises_on_missing_action(self):
+        from app.analyzer import explain_policy
+        with pytest.raises(ValueError, match="Action"):
+            explain_policy(json.dumps({
+                "Statement": [{"Effect": "Allow", "Resource": "*"}]
+            }))
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    def test_raises_on_non_iam_json(self):
+        from app.analyzer import explain_policy
+        with pytest.raises(ValueError):
+            explain_policy(json.dumps({"text": "who are you?"}))
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
     @patch("app.analyzer.anthropic.Anthropic")
     def test_raises_on_claude_api_failure(self, mock_anthropic_cls):
         import anthropic as anthropic_lib
