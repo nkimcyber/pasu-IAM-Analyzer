@@ -71,14 +71,28 @@ The `--ai` flag enables Claude-powered natural language explanations with specif
 
 ## What Pasu Detects
 
-**High Risk:**
-- Wildcard actions (`"Action": "*"`)
-- Wildcard resources (`"Resource": "*"`)
-- iam:PassRole, iam:CreatePolicyVersion, iam:AttachRolePolicy, iam:AttachGroupPolicy, iam:PutRolePolicy, iam:CreateRole, iam:PutGroupPolicy, iam:AddUserToGroup, iam:AttachUserPolicy, iam:PutUserPolicy, iam:CreateLoginProfile, iam:UpdateLoginProfile
+**High Risk (19 rules):**
+- Wildcard actions (`"Action": "*"`) and wildcard resources (`"Resource": "*"`)
+- IAM privilege escalation: iam:PassRole, iam:CreatePolicyVersion, iam:AttachRolePolicy, iam:AttachGroupPolicy, iam:PutRolePolicy, iam:CreateRole, iam:PutGroupPolicy, iam:AddUserToGroup, iam:AttachUserPolicy, iam:PutUserPolicy, iam:CreateLoginProfile, iam:UpdateLoginProfile, iam:SetDefaultPolicyVersion, iam:UpdateAssumeRolePolicy
+- S3 public exposure: s3:PutBucketPolicy, s3:PutBucketAcl, s3:PutObjectAcl
+- Code execution: lambda:CreateFunction, lambda:UpdateFunctionCode
+- Infrastructure control: ec2:RunInstances
+- Organization admin: organizations:*
+- Encryption keys: kms:Decrypt
 
-**Medium Risk:**
-- sts:AssumeRole
-- iam:CreateAccessKey
+**Medium Risk (6 rules):**
+- sts:AssumeRole, iam:CreateAccessKey
+- Data access: s3:GetObject (with Resource:*), dynamodb:Scan (with Resource:*)
+- Secrets access: secretsmanager:GetSecretValue, ssm:GetParameter
+- Reconnaissance: ec2:DescribeInstances
+- Data exfiltration: rds:CopyDBSnapshot
+
+**Structural Rules (5 rules):**
+- Unrestricted resource access (`"Resource": "*"` on any action)
+- Inverse action grants (`NotAction` — allows everything EXCEPT listed actions)
+- Inverse resource grants (`NotResource`)
+- Sensitive actions with no `Condition` block
+- Wildcard service grants (`"s3:*"`, `"iam:*"`, etc.)
 
 **With `--ai` flag:**
 - Detailed escalation path analysis (e.g., User → PassRole → EC2 → Admin Role)
@@ -132,6 +146,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/escalate \
 - [x] PyPI package (`pip install pasu`)
 - [x] More detection rules (S3 public access, cross-account trust)
 - [x] Output formats (--format json / table / sarif)
+- [ ] `pasu fix` — auto-generate least-privilege replacement policies
 - [ ] Azure RBAC / Entra ID support
 - [ ] GCP IAM support
 - [ ] Team dashboard with shared reports
