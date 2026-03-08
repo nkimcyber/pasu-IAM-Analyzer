@@ -113,35 +113,6 @@ Pasu uses a two-step analysis approach:
 
 ---
 
-## Web UI
-
-Pasu also includes a local web interface:
-
-```bash
-pip install pasu
-uvicorn app.main:app --reload
-```
-
-Open http://127.0.0.1:8000 — paste any IAM policy JSON to get instant analysis.
-
----
-
-## API
-
-```bash
-# Explain a policy
-curl -X POST http://127.0.0.1:8000/api/v1/explain \
-  -H "Content-Type: application/json" \
-  -d '{"policy_json": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"*\",\"Resource\":\"*\"}]}"}'
-
-# Check privilege escalation
-curl -X POST http://127.0.0.1:8000/api/v1/escalate \
-  -H "Content-Type: application/json" \
-  -d '{"policy_json": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"*\",\"Resource\":\"*\"}]}"}'
-```
-
----
-
 ## Roadmap
 
 - [x] CLI tool with local + AI analysis
