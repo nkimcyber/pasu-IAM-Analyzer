@@ -17,43 +17,37 @@
 
 ---
 
-## 2. Current State (v0.1.0)
+## 2. Current State (v0.5.0)
 
 **PyPI:** https://pypi.org/project/pasu/
 **Install:** `pip install pasu`
 
 ### Shipped Features
 
-**CLI (3 commands):**
+**CLI (5 commands):**
 - `pasu explain --file policy.json` — Plain English explanation of IAM policies
 - `pasu escalate --file policy.json` — Privilege escalation risk detection
 - `pasu scan --file policy.json` — Combined explain + escalate report
+- `pasu fix --file policy.json` — Auto-generate least-privilege replacement policy
+- All commands support: `--ai`, `--format text|json|sarif`, `-q`
 
 **Local mode (free, no API key required):**
-- Rule-based detection: wildcards (*), dangerous IAM actions, overly permissive policies
-- High-risk actions: iam:PassRole, iam:CreatePolicyVersion, iam:AttachRolePolicy, etc.
-- Medium-risk actions: sts:AssumeRole, iam:CreateAccessKey
+- 30 detection rules (19 high-risk, 6 medium-risk, 5 structural)
+- Risk scoring (0-100) with visual bar
+- Human-readable plain English explanations
+- Auto-fix with least-privilege policy generation
+- JSON and SARIF output for CI/CD integration
 
 **AI mode (--ai flag, requires Anthropic API key):**
 - Claude Haiku (claude-haiku-4-5-20251001) for detailed analysis
 - Natural language explanations with escalation path visualization
 - Cost-optimized: local detection first, Claude called only when needed
 
-**Web UI:**
-- FastAPI-based (http://127.0.0.1:8000)
-- Two tabs: Policy Explainer / Privilege Escalation Checker
-- Input validation (JSON, Statement, Effect/Action/Resource required)
-
-**API Endpoints:**
-- POST /api/v1/explain — Policy explanation
-- POST /api/v1/escalate — Privilege escalation detection
-- POST /api/v1/analyze — Security analysis (boto3, AWS only)
-- GET /api/v1/health — Health check
-
 **Infrastructure:**
-- 50 pytest tests (all passing)
-- GitHub Actions CI/CD (test → debug → prepare-review)
-- Cost-optimized design (Haiku model, local-first detection, input validation)
+- 145+ pytest tests (all passing)
+- GitHub Actions CI/CD
+- PyPI published (v0.5.0)
+- GitHub Actions example workflow for users
 
 ### Not Yet Built
 - User authentication
@@ -111,6 +105,10 @@ Reference cases: Snyk, Datadog, HashiCorp (Terraform).
 - [x] Expand detection rules (S3 public access, cross-account trust, excessive resource access)
 - [x] Output format options (--format json / --format table / --format sarif)
 - [x] Open-source public launch
+- [x] `pasu fix` — auto-generate least-privilege replacement policies
+- [x] Risk scoring (0-100) with visual bar
+- [x] GitHub Actions example workflow for users
+- [x] CI/CD integration docs (JSON + SARIF)
 - [ ] Product Hunt / Hacker News / Reddit launch
 - [ ] Technical blog (AWS IAM security content)
 
@@ -213,5 +211,5 @@ Reference cases: Snyk, Datadog, HashiCorp (Terraform).
 
 ---
 
-*Last updated: 2026-03-07*
-*Version: 0.1.0*
+*Last updated: 2026-03-08*
+*Version: 0.5.0*

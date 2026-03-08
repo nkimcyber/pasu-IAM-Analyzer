@@ -1,4 +1,4 @@
-# Pasu
+# Pasu - IAM Analyzer
 
 **The fastest way to find dangerous permissions in your AWS IAM policies.**
 
@@ -43,33 +43,50 @@ Requires Python 3.11+
 ## Usage
 
 ### Scan a policy (local analysis, no API key needed)
-
 ```bash
 pasu scan --file policy.json
 ```
 
-### Explain what a policy does
+Runs both explain and escalate together. Shows a combined report with risk score, detected risky actions, and plain English explanations.
 
+### Explain what a policy does
 ```bash
 pasu explain --file policy.json
 ```
 
-### Check for privilege escalation risks
+Translates IAM policy JSON into plain English that non-technical stakeholders can understand. Example: `"Action": "s3:PutBucketPolicy"` becomes "ALLOWS changing bucket security policy on all resources."
 
+### Check for privilege escalation risks
 ```bash
 pasu escalate --file policy.json
 ```
 
-### Get AI-powered detailed analysis
+Scans for 30+ risky patterns including privilege escalation, public S3 exposure, dangerous Lambda/EC2/KMS actions, and structural anti-patterns. Shows a risk score (0-100) with visual bar.
 
+### Auto-fix dangerous policies
+```bash
+pasu fix --file policy.json
+```
+
+Generates a least-privilege replacement policy:
+- Removes dangerous actions (iam:PassRole, etc.)
+- Replaces service wildcards (s3:*) with read-only equivalents
+- Flags Resource:* for manual scoping
+- Shows risk score before and after the fix
+- Preserves Deny statements
+
+Save the fixed policy to a file:
+```bash
+pasu fix --file policy.json --output fixed_policy.json
+```
+
+### Get AI-powered detailed analysis
 ```bash
 export ANTHROPIC_API_KEY="sk-..."
 pasu scan --file policy.json --ai
 ```
 
 The `--ai` flag enables Claude-powered natural language explanations with specific remediation guidance. Without it, Pasu runs entirely locally at zero cost.
-
----
 
 ## What Pasu Detects
 
