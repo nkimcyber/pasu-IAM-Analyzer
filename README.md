@@ -1,4 +1,4 @@
-# Pasu (파수)
+# Pasu
 
 **The fastest way to find dangerous permissions in your AWS IAM policies.**
 
