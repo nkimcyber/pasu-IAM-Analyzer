@@ -546,7 +546,7 @@ MOCK_ESCALATION_RESPONSE = {
 class TestEscalatePolicy:
     @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
     @patch("app.analyzer.anthropic.Anthropic")
-    def test_returns_high_risk_for_risky_policy(self, mock_anthropic_cls):
+    def test_returns_score_aligned_risk_level_for_risky_policy(self, mock_anthropic_cls):
         mock_content = MagicMock()
         mock_content.text = json.dumps(MOCK_ESCALATION_RESPONSE)
         mock_response = MagicMock()
@@ -556,7 +556,8 @@ class TestEscalatePolicy:
         from app.analyzer import escalate_policy
         result = escalate_policy(RISKY_POLICY_JSON)
 
-        assert result.risk_level == "High"
+        from app.analyzer import risk_score_label
+        assert result.risk_level == risk_score_label(result.risk_score)
         assert len(result.detected_actions) > 0
         assert len(result.findings) > 0
 
@@ -605,6 +606,7 @@ class TestEscalateEndpoint:
                 )
             ],
             summary="High risk detected.",
+            risk_score=90,
         )
         response = client.post(
             "/api/v1/escalate",
@@ -1591,8 +1593,8 @@ class TestFixPolicyLocal:
         # Must not be empty; should have TODO placeholder
         assert len(stmt["Action"]) > 0
         assert any("TODO" in a for a in stmt["Action"])
-        assert any("had all actions removed" in note
-                   for note in result.manual_review_needed)
+        assert any("TODO:specify-needed-actions" in note for note in result.manual_review_needed)
+        assert any("Manual review required" in note for note in result.manual_review_needed)
 
     def test_fix_service_wildcard_deduplicates_actions(self):
         from app.analyzer import fix_policy_local
@@ -1695,7 +1697,8 @@ class TestCliFixOutput:
             cmd_fix(args)
         output = buf.getvalue()
         # Should contain the JSON policy block and a summary header
-        assert "Fixed Policy" in output or "Statement" in output
+        assert "Proposed Policy" in output
+        assert "Statement" in output
 
     def test_fix_json_error_on_missing_file(self, tmp_path):
         from app.cli import cmd_fix

@@ -804,19 +804,46 @@ def calculate_risk_score(policy_json: str) -> int:
             score += 30
 
         # Service wildcard bonus: +10 per service:* (not counting the bare "*")
-        for action in actions_lower:
-            if action != "*" and action.endswith(":*"):
-                score += 10
+        service_wildcards = {
+            action for action in actions_lower
+            if action != "*" and action.endswith(":*")
+        }
+        score += len(service_wildcards) * 10
 
         # Action-based scoring: +8 per HIGH, +4 per MEDIUM
         if has_full_wildcard_action:
-            score += len(HIGH_RISK_ACTIONS) * 8
-            score += len(MEDIUM_RISK_ACTIONS) * 4
+            matched_high = set(HIGH_RISK_ACTIONS)
+            matched_medium = set(MEDIUM_RISK_ACTIONS)
         else:
-            matched_high = actions_lower & HIGH_RISK_ACTIONS
-            matched_medium = actions_lower & MEDIUM_RISK_ACTIONS
-            score += len(matched_high) * 8
-            score += len(matched_medium) * 4
+            matched_high = set(actions_lower & HIGH_RISK_ACTIONS)
+            matched_medium = set(actions_lower & MEDIUM_RISK_ACTIONS)
+
+            # Expand service wildcards so iam:* and s3:* reflect the risky actions
+            # they actually include.
+            for wildcard in service_wildcards:
+                svc = wildcard.split(":")[0]
+
+                matched_high |= {
+                    action
+                    for action in HIGH_RISK_ACTIONS
+                    if action.startswith(f"{svc}:") or action == f"{svc}:*"
+                }
+                matched_medium |= {
+                    action
+                    for action in MEDIUM_RISK_ACTIONS
+                    if action.startswith(f"{svc}:") or action == f"{svc}:*"
+                }
+
+                # Context-dependent medium risk covered by service wildcard
+                if has_full_wildcard_resource:
+                    matched_medium |= {
+                        action
+                        for action in _CONTEXT_MEDIUM
+                        if action.startswith(f"{svc}:")
+                    }
+
+        score += len(matched_high) * 8
+        score += len(matched_medium) * 4
 
         # Structural rule scoring
         # R001: Unrestricted resource
@@ -828,15 +855,16 @@ def calculate_risk_score(policy_json: str) -> int:
             score += 6
 
         # R005: Sensitive action without Condition
-        if has_full_wildcard_action:
-            has_sensitive = True
-        else:
-            matched_high = actions_lower & HIGH_RISK_ACTIONS
-            matched_medium = actions_lower & MEDIUM_RISK_ACTIONS
-            has_sensitive = bool(matched_high or matched_medium) or (
+        has_sensitive = (
+            has_full_wildcard_action
+            or bool(service_wildcards)
+            or bool(matched_high)
+            or bool(matched_medium)
+            or (
                 has_full_wildcard_resource
                 and any(a in _CONTEXT_MEDIUM for a in actions_lower)
             )
+        )
         if has_sensitive and not condition:
             score += 5
 
@@ -930,28 +958,16 @@ def escalate_policy_local(policy_json: str) -> EscalationResult:
 
     validate_iam_policy(parsed)
 
-    # Action-based detection — drives detected_actions and backward-compat risk level
+    # Action-based detection — drives detected_actions
     allowed_actions = _extract_allowed_actions(parsed)
-    detected, action_risk_level = _detect_risky_actions(allowed_actions)
+    detected, _ = _detect_risky_actions(allowed_actions)
 
     # Structural rule engine — all three categories
     rule_findings = analyze_policy_rules(policy_json)
 
-    # Derive risk level from rule findings
-    _rank = {"Low": 0, "Medium": 1, "High": 2}
-    rules_risk_level = "Low"
-    for f in rule_findings:
-        if f.severity == "high":
-            rules_risk_level = "High"
-            break
-        if f.severity == "medium":
-            rules_risk_level = "Medium"
-
-    risk_level = (
-        action_risk_level
-        if _rank[action_risk_level] >= _rank[rules_risk_level]
-        else rules_risk_level
-    )
+    # Risk score is the source of truth for displayed risk level
+    risk_score = calculate_risk_score(policy_json)
+    risk_level = risk_score_label(risk_score)
 
     n_rules = len(rule_findings)
     rule_note = f", {n_rules} rule finding(s) total" if rule_findings else ""
@@ -974,8 +990,9 @@ def escalate_policy_local(policy_json: str) -> EscalationResult:
         detected_actions=detected,
         findings=[],
         summary=summary,
-        risk_score=calculate_risk_score(policy_json),
+        risk_score=risk_score,
     )
+
 
 
 # ── Fix Function ─────────────────────────────────────────────────────────────
@@ -1007,8 +1024,8 @@ def fix_policy_local(policy_json: str) -> FixResult:
 
     validate_iam_policy(parsed)
 
-    original_allowed = _extract_allowed_actions(parsed)
-    _, original_risk_level = _detect_risky_actions(original_allowed)
+    original_risk_score = calculate_risk_score(policy_json)
+    original_risk_level = risk_score_label(original_risk_score)
 
     changes: list[FixChange] = []
     manual_review_needed: list[str] = []
@@ -1018,7 +1035,8 @@ def fix_policy_local(policy_json: str) -> FixResult:
         effect = stmt.get("Effect")
         has_not_action = "NotAction" in stmt
         has_not_resource = "NotResource" in stmt
-
+        sid = stmt.get("Sid")
+        statement_label = f"Statement {i + 1} ({sid})" if sid else f"Statement {i + 1}"
         # Deny → keep unchanged
         if effect == "Deny":
             fixed_statements.append(dict(stmt))
@@ -1033,7 +1051,7 @@ def fix_policy_local(policy_json: str) -> FixResult:
             if has_not_resource:
                 parts.append("NotResource")
             manual_review_needed.append(
-                f"Statement[{i}] uses {' and '.join(parts)} — cannot auto-fix, "
+                f"{statement_label} uses {' and '.join(parts)} — cannot auto-fix, "
                 "manual review required"
             )
             continue
@@ -1127,8 +1145,9 @@ def fix_policy_local(policy_json: str) -> FixResult:
             if not fixed_actions:
                 fixed_actions = ["TODO:specify-needed-actions"]
                 manual_review_needed.append(
-                    f"Statement[{i}] had all actions removed — "
-                    "specify safe replacement actions"
+                    f"{statement_label} had all high-risk actions removed. "
+                    "Manual review required. "
+                    'Replace "TODO:specify-needed-actions" with the minimum safe actions this policy needs.'
                 )
 
         fixed_stmt["Action"] = fixed_actions
@@ -1155,8 +1174,9 @@ def fix_policy_local(policy_json: str) -> FixResult:
         "Statement": fixed_statements,
     }
 
-    fixed_allowed = _extract_allowed_actions({"Statement": fixed_statements})
-    _, fixed_risk_level = _detect_risky_actions(fixed_allowed)
+    fixed_policy_json = json.dumps(fixed_policy)
+    fixed_risk_score = calculate_risk_score(fixed_policy_json)
+    fixed_risk_level = risk_score_label(fixed_risk_score)
 
     return FixResult(
         original_risk_level=original_risk_level,
@@ -1306,15 +1326,18 @@ def escalate_policy(policy_json: str) -> EscalationResult:
 
     # Step 1 — local detection (free, no API call)
     allowed_actions = _extract_allowed_actions(parsed_input)
-    detected, risk_level = _detect_risky_actions(allowed_actions)
+    detected, _ = _detect_risky_actions(allowed_actions)
+    risk_score = calculate_risk_score(policy_json)
+    risk_level = risk_score_label(risk_score)
 
     # Step 2 — if no risky actions, return immediately (no Claude call)
     if not detected:
         return EscalationResult(
-            risk_level="Low",
+            risk_level=risk_level,
             detected_actions=[],
             findings=[],
             summary="No privilege escalation risks detected in this policy.",
+            risk_score=risk_score,
         )
 
     # Step 3 — call Claude only for risky policies
@@ -1357,4 +1380,5 @@ def escalate_policy(policy_json: str) -> EscalationResult:
         detected_actions=detected,
         findings=findings,
         summary=parsed.get("summary", ""),
+        risk_score=risk_score,
     )

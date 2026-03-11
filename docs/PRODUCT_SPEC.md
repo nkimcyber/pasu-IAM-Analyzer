@@ -1,71 +1,155 @@
 # Pasu — Product Specification
 
-> **Pasu (파수/把守)** — Guardian of your Cloud IAM
+> **Pasu (파수/把守)** — Guardian of your Cloud IAM  
 > Project codename: **Moon**
 
 ---
 
 ## 1. Vision
 
-**One-liner:** The fastest, lightest tool to scan AWS/Azure/GCP IAM permissions and explain excessive privileges in plain English.
+**One-liner:** A lightweight CLI for analyzing AWS IAM permissions, explaining risky access in plain English, and helping users move toward safer policies.
 
-**Positioning:** "Snyk for multi-cloud IAM" — While existing CIEM tools (Wiz, Tenable, Prisma Cloud) are enterprise-only and take weeks to deploy, Pasu lets any developer start with `pip install pasu` in under 5 minutes.
+Pasu is designed for engineers who want a fast, self-serve IAM security workflow without complex setup.
 
-**Differentiator:**
-- Existing tools: Detect risks and say "this is dangerous"
-- Pasu: Explains *why* it's dangerous and *how* to fix it, using AI-powered natural language
+### What Pasu tries to do well
+- Explain what an IAM policy actually allows
+- Detect risky permissions and privilege escalation paths
+- Show a clear risk score
+- Generate a safer **proposed policy**
+- Tell users what still requires manual review
+
+### Product philosophy
+Pasu should be useful on day one:
+- install quickly
+- run locally
+- explain results clearly
+- avoid unsafe or misleading “magic fixes”
 
 ---
 
 ## 2. Current State (v0.5.0)
 
-**PyPI:** https://pypi.org/project/pasu/
+**PyPI:** `https://pypi.org/project/pasu/`  
 **Install:** `pip install pasu`
 
 ### Shipped Features
 
-**CLI (5 commands):**
-- `pasu explain --file policy.json` — Plain English explanation of IAM policies
-- `pasu escalate --file policy.json` — Privilege escalation risk detection
+#### CLI commands
+- `pasu explain --file policy.json` — Explain IAM policies in plain English
+- `pasu escalate --file policy.json` — Detect privilege escalation risks
 - `pasu scan --file policy.json` — Combined explain + escalate report
-- `pasu fix --file policy.json` — Auto-generate least-privilege replacement policy
+- `pasu fix --file policy.json` — Generate a safer **proposed policy**
 - All commands support: `--ai`, `--format text|json|sarif`, `-q`
 
-**Local mode (free, no API key required):**
-- 30 detection rules (19 high-risk, 6 medium-risk, 5 structural)
-- Risk scoring (0-100) with visual bar
-- Human-readable plain English explanations
-- Auto-fix with least-privilege policy generation
+#### Local mode (free, no API key required)
+- 30 detection rules
+  - 19 high-risk
+  - 6 medium-risk
+  - 5 structural
+- Risk scoring from 0–100 with a visual bar
+- Human-readable explanations
+- Conservative policy fixing
 - JSON and SARIF output for CI/CD integration
 
-**AI mode (--ai flag, requires Anthropic API key):**
-- Claude Haiku (claude-haiku-4-5-20251001) for detailed analysis
-- Natural language explanations with escalation path visualization
-- Cost-optimized: local detection first, Claude called only when needed
+#### AI mode (`--ai`, requires Anthropic API key)
+- Claude Haiku for deeper analysis
+- More detailed natural-language explanations
+- Escalation-path-oriented output
+- Local analysis first, AI only when needed
 
-**Infrastructure:**
-- 145+ pytest tests (all passing)
+#### Infrastructure
+- 145+ pytest tests
 - GitHub Actions CI/CD
-- PyPI published (v0.5.0)
-- GitHub Actions example workflow for users
-
-### Not Yet Built
-- User authentication
-- Cloud deployment (local only)
-- Azure / GCP support
-- Batch policy analysis
-- Multi-account AWS support (STS AssumeRole)
-- Structured logging
+- PyPI published
+- Example GitHub Actions workflow for users
 
 ---
 
-## 3. Tech Stack
+## 3. What `pasu fix` does today
+
+`pasu fix` is intentionally conservative.
+
+It does **not** promise a perfect final least-privilege policy.  
+It generates a safer **proposed policy** and explains what still needs review.
+
+### Current fix behavior
+- Removes obvious high-risk actions when safe to do so
+- Keeps some medium-risk actions if auto-removing them may break intended access
+- Keeps wildcard resources when Pasu cannot safely narrow them without resource-specific context
+- Adds warnings and notes to explain why some broad permissions remain
+- Adds manual-review guidance when auto-fix cannot safely finish the statement
+
+### Important behavior
+The output from `pasu fix` is designed to be:
+- reviewable
+- explicit
+- conservative
+- less misleading than an overconfident “auto-remediation” result
+
+### Current output improvements
+`pasu fix` currently includes:
+- risk level and risk score that use the same scoring basis
+- grouped wildcard-resource warnings by statement number
+- human-facing statement numbering using 1-based numbering
+- `Proposed Policy` wording instead of `Fixed Policy`
+- text highlighting for:
+  - `TODO:specify-needed-actions`
+  - risky `Allow + Resource "*" `
+- explanation for why wildcard resources remain
+- explanation for which medium-risk actions remain
+- manual review messages that include:
+  - statement number
+  - `Sid` when present
+  - the next action the user should take
+
+---
+
+## 4. Example `pasu fix` behavior
+
+A typical `pasu fix` result may:
+- remove `iam:PassRole`
+- remove `lambda:CreateFunction`
+- remove `lambda:UpdateFunctionCode`
+- keep `sts:AssumeRole`
+- keep `ec2:DescribeInstances`
+- keep `secretsmanager:GetSecretValue`
+- keep `ssm:GetParameter`
+- keep `Resource: "*"` when safe narrowing is not possible
+- insert `"TODO:specify-needed-actions"` when all risky actions in a statement were removed
+
+That is expected behavior.
+
+Pasu currently prefers:
+- a safer **proposed policy**
+- plus warnings and manual review guidance
+
+over:
+- an aggressive auto-fix that may silently break intended access
+
+---
+
+## 5. Not Yet Built
+
+- Azure support
+- GCP support
+- Trust policy analysis expansion
+- Batch policy analysis
+- Multi-account AWS support (STS AssumeRole workflows)
+- Full live-account audit workflows
+- Structured logging improvements
+- Team workflows / collaboration features
+- Hosted web product
+
+---
+
+## 6. Tech Stack
 
 | Component | Technology |
-|-----------|------------|
+|---|---|
 | Language | Python 3.11.9 |
+| Primary Interface | CLI |
 | Web Framework | FastAPI |
-| AI Model | claude-haiku-4-5-20251001 |
+| AI Model | Claude Haiku |
 | AWS SDK | boto3 |
 | Validation | Pydantic |
 | Testing | pytest |
@@ -74,142 +158,71 @@
 
 ---
 
-## 4. Business Model — PLG (Product-Led Growth)
+## 7. Near-Term Technical Roadmap
 
-### Strategy
-Individual developers start free → adopt within their team → company purchases license.
+### Phase 1 — AWS CLI hardening
+- Improve policy-fix clarity and safety
+- Expand rule coverage
+- Improve trust policy analysis
+- Improve CI/CD integration outputs
+- Improve auditability and test coverage
+- Improve developer UX for local and CI use
 
-Reference cases: Snyk, Datadog, HashiCorp (Terraform).
+### Phase 2 — Azure support and team workflows
+- Azure RBAC / Entra ID analysis
+- Better workflow support for team usage
+- Shared reporting and notifications
+- Broader multi-environment support
 
-### Pricing (Planned)
-
-| Tier | Price | Target | Features |
-|------|-------|--------|----------|
-| Free | $0 | Individual developers | CLI local analysis, 1 AWS account, basic reports |
-| Pro | $49-99/mo | Teams (2-10) | AI analysis, multi-account, Slack alerts, team dashboard |
-| Enterprise | $500-2,000+/mo | Organizations | SSO, RBAC, audit logs, SLA, compliance mapping, dedicated support |
-
----
-
-## 5. Roadmap
-
-### Phase 1: AWS Only — CLI + Community (Now ~ 6 months)
-
-**Goal:** 500+ GitHub Stars, 1,000 monthly active users
-
-- [x] CLI tool (explain, escalate, scan)
-- [x] Local-only mode (no API key required)
-- [x] AI mode (--ai flag)
-- [x] PyPI release (v0.1.0)
-- [x] GitHub repo polish (README + screenshots + GIF demo)
-- [x] Expand detection rules (S3 public access, cross-account trust, excessive resource access)
-- [x] Output format options (--format json / --format table / --format sarif)
-- [x] Open-source public launch
-- [x] `pasu fix` — auto-generate least-privilege replacement policies
-- [x] Risk scoring (0-100) with visual bar
-- [x] GitHub Actions example workflow for users
-- [x] CI/CD integration docs (JSON + SARIF)
-- [ ] Product Hunt / Hacker News / Reddit launch
-- [ ] Technical blog (AWS IAM security content)
-
-### Phase 2: + Azure, Team Features, Monetization (6 ~ 18 months)
-
-**Goal:** 20-50 paying customers, $1,000-5,000 MRR
-
-- [ ] Azure RBAC / Entra ID analysis
-- [ ] "Select your CSP" web UI
-- [ ] User authentication (Auth0 / AWS Cognito)
-- [ ] Web dashboard deployment (AWS Lambda + API Gateway)
-- [ ] Team features (member invites, shared dashboard)
-- [ ] Slack / Teams notifications
-- [ ] Automated weekly security reports
-- [ ] Pro plan launch
-- [ ] AWS Activate credits application
-
-### Phase 3: + GCP, Enterprise (18 months+)
-
-**Goal:** $100K+ ARR, enterprise customers
-
-- [ ] GCP IAM analysis
-- [ ] Cross-cloud comparison view
-- [ ] SSO (SAML/OIDC), RBAC
-- [ ] SOC 2 / CIS / HIPAA compliance mapping
-- [ ] Auto-remediation workflows
-- [ ] AWS Marketplace listing
-- [ ] Enterprise plan launch
-- [ ] SLA + dedicated support
+### Phase 3 — GCP and broader enterprise controls
+- GCP IAM support
+- Cross-cloud analysis patterns
+- Better organizational controls and reporting
 
 ---
 
-## 6. Hosting Plan
+## 8. Core Principles
 
-| Phase | Infrastructure | Monthly Cost |
-|-------|---------------|-------------|
-| Phase 1 | GitHub + PyPI + Vercel (landing page) | $0-20 |
-| Phase 2 | AWS Lambda + API Gateway + DynamoDB | $50-150 (near $0 with Activate credits) |
-| Phase 3 | ECS Fargate + RDS PostgreSQL + ElastiCache | $500-2,000+ |
+### 1. Local-first by default
+Users should get useful results without needing a hosted account or API key.
 
----
+### 2. Explain before impressing
+Security tools should explain what is risky, why it matters, and what users should do next.
 
-## 7. Competitive Landscape
+### 3. Conservative fixes over unsafe automation
+Pasu should prefer a reviewable **proposed policy** over an overconfident or destructive auto-remediation.
 
-### Direct Competitors
-- **Wiz CIEM** — Agentless, multi-cloud, 1-2 week deployment, $50K+/yr
-- **Tenable Cloud Security** (fmr. Ermetic) — Multi-cloud, granular visibility
-- **Prisma Cloud CIEM** — Palo Alto, full SDLC coverage
-- **Sonrai Security** — Identity graph visualization, 3-6 week deployment
-- **Microsoft Entra Permissions Management** — Azure-centric
+### 4. Human-readable output matters
+Results should be understandable even for people who are not deep IAM experts.
 
-### How Pasu is Different
+### 5. Clear machine-readable output matters too
+JSON and SARIF should remain useful for automation and CI/CD pipelines.
 
-| Existing CIEM | Pasu |
-|--------------|------|
-| 1-6 week deployment | pip install, 5 minutes |
-| $50K-$200K+/yr | Free ~ $199/mo |
-| Requires sales call | Self-service signup |
-| Enterprise-only | Starts with a solo DevOps engineer |
-| Does everything (CNAPP) | Does IAM permission analysis exceptionally well |
+### 6. One cloud problem at a time
+Depth and correctness are more important than claiming broad cloud coverage too early.
 
-### Key Risks
-- AWS may ship equivalent functionality natively (AWS Security Agent already in preview)
-- Low price may signal "cheap = unreliable" in the security market
-- Solo developer credibility gap for B2B security tool
+### 7. Community-first product discipline
+The public CLI should solve real user problems before broader platform ambitions are expanded.
 
 ---
 
-## 8. Go-to-Market Channels (Phase 1)
+## 9. Coding Standards
 
-- GitHub README (serves as landing page)
-- Product Hunt launch
-- Hacker News (Show HN)
-- Reddit (r/aws, r/devops, r/netsec)
-- Dev.to / Medium technical blog
-- Twitter/X (AWS security content)
-- AWS community meetups
-
----
-
-## 9. Core Principles
-
-1. **Deliver value without an API key** — Local analysis must be useful on its own
-2. **Read-only access only** — Never request write permissions to user's cloud environment
-3. **Transparent cost** — Users must be able to predict AI analysis costs
-4. **Perfect one CSP before expanding** — Never build 3 CSPs simultaneously
-5. **Community first** — User count and feedback before revenue
-
----
-
-## 10. Coding Standards
-
-- PEP 484 type annotations
+- PEP 484 type annotations on all functions
 - Google-style docstrings
-- Black formatting (88 char line limit)
+- Black formatting (88-char line limit)
 - No hardcoded credentials
-- All boto3 calls: try/except ClientError
-- All Claude API calls: try/except APIError
+- All boto3 calls wrapped with `try/except ClientError`
+- All Claude API calls wrapped with `try/except APIError`
 - ERROR-level logging before re-raise
+- Complete file outputs preferred over partial snippets during code generation
 
 ---
 
-*Last updated: 2026-03-08*
-*Version: 0.5.0*
+## 10. Maintainer Notes
+
+This public specification is intentionally focused on:
+- current product behavior
+- technical direction
+- output quality
+- safety principles

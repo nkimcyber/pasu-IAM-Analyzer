@@ -73,6 +73,63 @@ def _risk_bar(score: int) -> str:
     color = _risk_color(level)
     return f"{_color(bar, color)} {score}/100 ({level})"
 
+def _highlight_proposed_policy(policy: dict) -> str:
+    """Return pretty-printed policy JSON with TODO placeholders and risky wildcard resources highlighted."""
+    rendered_policy = json.loads(json.dumps(policy))
+
+    for stmt in rendered_policy.get("Statement", []):
+        if stmt.get("Effect") != "Allow":
+            continue
+
+        resource = stmt.get("Resource")
+        if resource == "*":
+            stmt["Resource"] = "__PASU_HIGHLIGHT_STAR__"
+        elif isinstance(resource, list):
+            stmt["Resource"] = [
+                "__PASU_HIGHLIGHT_STAR__" if r == "*" else r
+                for r in resource
+            ]
+
+    rendered = json.dumps(rendered_policy, indent=2)
+
+    if not _supports_color():
+        return rendered.replace('"__PASU_HIGHLIGHT_STAR__"', '"*"')
+
+    rendered = rendered.replace(
+        '"__PASU_HIGHLIGHT_STAR__"',
+        '"' + _color("*", _YELLOW) + '"',
+    )
+
+    pattern = r'"(TODO:[^"]+)"'
+
+    def repl(match: re.Match[str]) -> str:
+        return '"' + _color(match.group(1), _YELLOW) + '"'
+
+    return re.sub(pattern, repl, rendered)
+
+def _collect_statement_medium_actions(
+    policy: dict, risky_actions: set[str]
+) -> list[tuple[int, list[str]]]:
+    """Return 1-based statement indexes with remaining risky actions."""
+    results: list[tuple[int, list[str]]] = []
+
+    for i, stmt in enumerate(policy.get("Statement", []), start=1):
+        if stmt.get("Effect") != "Allow":
+            continue
+
+        actions = stmt.get("Action", [])
+        if isinstance(actions, str):
+            actions = [actions]
+
+        matched: list[str] = []
+        for action in actions:
+            if action.lower() in risky_actions:
+                matched.append(action)
+
+        if matched:
+            results.append((i, matched))
+
+    return results
 
 def _header(title: str) -> str:
     bar = "=" * (len(title) + 4)
@@ -374,6 +431,9 @@ def cmd_escalate(args: argparse.Namespace) -> None:
             result = escalate_policy(policy_json=policy_json)
         else:
             result = escalate_policy_local(policy_json=policy_json)
+
+        result.risk_level = risk_score_label(result.risk_score)
+
         need_findings = args.format in ("json", "sarif")
         rule_findings = analyze_policy_rules(policy_json) if need_findings else []
     except ValueError as exc:
@@ -407,8 +467,12 @@ def cmd_scan(args: argparse.Namespace) -> None:
         else:
             explain_result = explain_policy_local(policy_json=policy_json)
             escalate_result = escalate_policy_local(policy_json=policy_json)
+
+        escalate_result.risk_level = risk_score_label(escalate_result.risk_score)
+        
         need_findings = args.format in ("json", "sarif")
         rule_findings = analyze_policy_rules(policy_json) if need_findings else []
+        
     except ValueError as exc:
         _handle_error(f"Validation error: {exc}", use_machine)
         return
@@ -439,8 +503,7 @@ def _fix_to_json(result) -> dict:
     }
 
 
-def _print_fix(result, output_path: str | None = None,
-               original_score: int = 0, fixed_score: int = 0) -> None:
+def _print_fix(result, output_path: str | None, original_score: int, fixed_score: int) -> None:
     orig_code = _risk_color(result.original_risk_level)
     fixed_code = _risk_color(result.fixed_risk_level)
     print(_header("IAM Policy Fix Report"))
@@ -456,6 +519,9 @@ def _print_fix(result, output_path: str | None = None,
 
     if result.changes:
         print(_section("Changes Applied"))
+        resource_wildcard_statement_indexes: list[int] = []
+        resource_wildcard_reason: str | None = None
+
         for change in result.changes:
             if change.type == "removed_action":
                 print(f"  • Removed {_color(change.action or '', _RED)}: {change.reason}")
@@ -465,20 +531,52 @@ def _print_fix(result, output_path: str | None = None,
                 print(f"  • {from_str}  →  {to_str}")
                 print(f"      {change.reason}")
             elif change.type == "resource_wildcard_warning":
-                print(f"  • {_color('WARNING', _YELLOW)}: {change.reason}")
+                resource_wildcard_statement_indexes.append(change.statement_index)
+                if resource_wildcard_reason is None:
+                    resource_wildcard_reason = change.reason or ""
+
+        if resource_wildcard_statement_indexes and resource_wildcard_reason is not None:
+            one_based = sorted(set(i + 1 for i in resource_wildcard_statement_indexes))
+            stmt_str = ", ".join(str(i) for i in one_based)
+            print(
+                f"  • {_color('WARNING', _YELLOW)}: "
+                f"{resource_wildcard_reason} (Statements: {stmt_str})"
+            )
+
+        resource_context_note_indexes = sorted(
+            set(i + 1 for i in resource_wildcard_statement_indexes)
+        )
+        if resource_context_note_indexes:
+            joined = ", ".join(str(i) for i in resource_context_note_indexes)
+            print(
+                f"  • {_color('NOTE', _CYAN)}: Wildcard resource remains in Statements {joined} "
+                "because PASU cannot safely narrow resources without specific ARN context."
+            )
+
+        remaining_medium_actions = _collect_statement_medium_actions(
+            result.fixed_policy,
+            MEDIUM_RISK_ACTIONS,
+        )
+        if remaining_medium_actions:
+            print(
+                f"  • {_color('NOTE', _CYAN)}: Medium-risk actions remain because "
+                "auto-removing them may break intended access:"
+            )
+            for statement_index, actions in remaining_medium_actions:
+                joined_actions = ", ".join(actions)
+                print(f"      • Statement {statement_index}: {joined_actions}")
 
     if result.manual_review_needed:
         print(_section("Manual Review Required"))
         for note in result.manual_review_needed:
             print(f"  • {_color(note, _YELLOW)}")
 
-    print(_section("Fixed Policy"))
-    print(json.dumps(result.fixed_policy, indent=2))
+    print(_section("Proposed Policy"))
+    print(_highlight_proposed_policy(result.fixed_policy))
 
     if output_path:
         print(_section("Saved"))
         print(f"  Fixed policy written to: {output_path}")
-
 
 def cmd_fix(args: argparse.Namespace) -> None:
     use_machine = args.format != "text"
@@ -495,7 +593,11 @@ def cmd_fix(args: argparse.Namespace) -> None:
         return
 
     original_score = calculate_risk_score(policy_json)
-    fixed_score = calculate_risk_score(json.dumps(result.fixed_policy))
+    fixed_policy_json = json.dumps(result.fixed_policy)
+    fixed_score = calculate_risk_score(fixed_policy_json)
+
+    result.original_risk_level = risk_score_label(original_score)
+    result.fixed_risk_level = risk_score_label(fixed_score)
 
     if args.output:
         try:

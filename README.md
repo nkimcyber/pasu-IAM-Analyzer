@@ -1,6 +1,6 @@
 # Pasu - IAM Analyzer
 
-**The fastest way to find dangerous permissions in your AWS IAM policies.**
+**A lightweight CLI to analyze AWS IAM policies, explain risky access in plain English, and generate safer proposed policies.**
 
 Pasu is a lightweight CLI tool that scans IAM policy JSON for security risks and explains them in plain English. No account setup, no cloud agent, no sales call — just `pip install pasu` and go.
 
@@ -45,19 +45,19 @@ pasu escalate --file policy.json
 
 Scans for 30+ risky patterns including privilege escalation, public S3 exposure, dangerous Lambda/EC2/KMS actions, and structural anti-patterns. Shows a risk score (0-100) with visual bar.
 
-### Auto-fix dangerous policies
+### Generate a safer proposed policy
 ```bash
 pasu fix --file policy.json
 ```
 
-Generates a least-privilege replacement policy:
+Generates a safer proposed policy and explains what still needs manual review:
 - Removes dangerous actions (iam:PassRole, etc.)
 - Replaces service wildcards (s3:*) with read-only equivalents
 - Flags Resource:* for manual scoping
 - Shows risk score before and after the fix
 - Preserves Deny statements
 
-Save the fixed policy to a file:
+Save the proposed policy to a file:
 ```bash
 pasu fix --file policy.json --output fixed_policy.json
 ```
@@ -118,7 +118,8 @@ Pasu uses a two-step analysis approach:
 - [x] PyPI package (`pip install pasu`)
 - [x] More detection rules (S3 public access, cross-account trust)
 - [x] Output formats (--format json / table / sarif)
-- [x] `pasu fix` — auto-generate least-privilege replacement policies
+- [x] `pasu fix` — generate safer proposed policies with manual review guidance
+- [ ] Interactive shell mode
 - [ ] Azure RBAC / Entra ID support
 - [ ] GCP IAM support
 - [ ] Team dashboard with shared reports
