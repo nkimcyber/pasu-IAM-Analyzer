@@ -1,0 +1,61 @@
+{
+  "high_risk_actions": [
+    "ec2:runinstances",
+    "iam:attachgrouppolicy",
+    "iam:attachrolepolicy",
+    "iam:attachuserpolicy",
+    "iam:createpolicyversion",
+    "iam:createrole",
+    "iam:passrole",
+    "iam:putrolepolicy",
+    "iam:putuserpolicy",
+    "iam:setdefaultpolicyversion",
+    "iam:updateassumerolepolicy",
+    "kms:decrypt",
+    "kms:describekey",
+    "lambda:createfunction",
+    "lambda:updatefunctioncode",
+    "organizations:*",
+    "s3:putbucketacl",
+    "s3:putbucketpolicy",
+    "s3:putobjectacl"
+  ],
+  "medium_risk_actions": [
+    "ec2:describeinstances",
+    "iam:createaccesskey",
+    "rds:copydbsnapshot",
+    "secretsmanager:getsecretvalue",
+    "ssm:getparameter",
+    "sts:assumerole"
+  ],
+  "context_medium_actions": {
+    "s3:getobject": "Read access to all S3 objects across all buckets in the account.",
+    "dynamodb:scan": "Scan access to all DynamoDB tables, exposing all stored data."
+  },
+  "action_descriptions": {
+    "iam:passrole": "Allows passing IAM roles to AWS services, enabling privilege escalation to any role that can be passed.",
+    "iam:createpolicyversion": "Can create a new policy version with elevated permissions and set it as default.",
+    "iam:setdefaultpolicyversion": "Can activate a previously created permissive policy version.",
+    "iam:attachrolepolicy": "Can attach admin-level managed policies to any role.",
+    "iam:attachuserpolicy": "Can attach admin-level managed policies to any user.",
+    "iam:attachgrouppolicy": "Can attach admin-level managed policies to any group.",
+    "iam:putrolepolicy": "Can inject an inline policy granting elevated permissions to any role.",
+    "iam:createrole": "Can create roles with arbitrary permissions and assume them.",
+    "iam:updateassumerolepolicy": "Can modify a role's trust policy to allow any principal to assume it.",
+    "s3:putbucketpolicy": "Can overwrite a bucket policy to make it publicly accessible or grant cross-account access.",
+    "s3:putbucketacl": "Can change a bucket's ACL to make it publicly readable or writable.",
+    "s3:putobjectacl": "Can expose individual S3 objects to the public by modifying their ACLs.",
+    "lambda:createfunction": "Can deploy arbitrary code as a Lambda function with any specified execution role.",
+    "lambda:updatefunctioncode": "Can replace the code of a running Lambda function with arbitrary code.",
+    "ec2:runinstances": "Can launch EC2 instances with a specified IAM role, executing code with that role's permissions.",
+    "organizations:*": "Grants full control over the AWS Organization, including creating and managing member accounts.",
+    "kms:decrypt": "Can decrypt any data encrypted under accessible KMS keys, enabling data exfiltration.",
+    "kms:describekey": "Can enumerate KMS key metadata, useful for identifying encryption keys to target.",
+    "sts:assumerole": "Can assume IAM roles, potentially gaining permissions beyond the current principal.",
+    "iam:createaccesskey": "Can create persistent access key credentials for any IAM user.",
+    "secretsmanager:getsecretvalue": "Can retrieve any secret value from AWS Secrets Manager, including credentials.",
+    "ssm:getparameter": "Can read any SSM parameter, including SecureString parameters containing secrets.",
+    "rds:copydbsnapshot": "Can copy RDS snapshots to another account, potentially exfiltrating database contents.",
+    "ec2:describeinstances": "Enables discovery of all EC2 instances in the account, facilitating reconnaissance."
+  }
+}

@@ -27,7 +27,7 @@ Pasu should be useful on day one:
 
 ---
 
-## 2. Current State (v0.5.0)
+## 2. Current State (post-Phase 1 externalization)
 
 **PyPI:** `https://pypi.org/project/pasu/`  
 **Install:** `pip install pasu`
@@ -58,14 +58,39 @@ Pasu should be useful on day one:
 - Local analysis first, AI only when needed
 
 #### Infrastructure
-- 145+ pytest tests
+- 159 pytest tests passing
 - GitHub Actions CI/CD
 - PyPI published
 - Example GitHub Actions workflow for users
+- Rule/scoring/fix data externalized into packaged config files
 
 ---
 
-## 3. What `pasu fix` does today
+## 3. Rule and Scoring Architecture
+
+Phase 1 moved the local analyzer away from a fully hardcoded rule layout.
+
+### Current packaged analyzer data
+- `app/rules/risky_actions.yaml`
+- `app/rules/scoring.yaml`
+- `app/rules/fix_profiles.yaml`
+- `app/data/aws_catalog.json`
+
+### What this changed
+- Detection taxonomy is easier to update and review
+- Scoring changes are separated from analyzer logic
+- Fix profiles are easier to expand without large code edits
+- Packaging now explicitly includes rule/data files
+- CLI and API contracts remain stable
+
+### What Phase 1 did **not** do
+- It did not add a live AWS catalog sync job
+- It did not auto-classify new AWS actions into risk tiers
+- It did not change Pasu into a full live-account audit platform
+
+---
+
+## 4. What `pasu fix` does today
 
 `pasu fix` is intentionally conservative.
 
@@ -94,7 +119,7 @@ The output from `pasu fix` is designed to be:
 - `Proposed Policy` wording instead of `Fixed Policy`
 - text highlighting for:
   - `TODO:specify-needed-actions`
-  - risky `Allow + Resource "*" `
+  - risky `Allow + Resource "*"`
 - explanation for why wildcard resources remain
 - explanation for which medium-risk actions remain
 - manual review messages that include:
@@ -104,7 +129,7 @@ The output from `pasu fix` is designed to be:
 
 ---
 
-## 4. Example `pasu fix` behavior
+## 5. Example `pasu fix` behavior
 
 A typical `pasu fix` result may:
 - remove `iam:PassRole`
@@ -128,7 +153,7 @@ over:
 
 ---
 
-## 5. Not Yet Built
+## 6. Not Yet Built
 
 - Azure support
 - GCP support
@@ -142,7 +167,7 @@ over:
 
 ---
 
-## 6. Tech Stack
+## 7. Tech Stack
 
 | Component | Technology |
 |---|---|
@@ -158,15 +183,27 @@ over:
 
 ---
 
-## 7. Near-Term Technical Roadmap
+## 8. Near-Term Technical Roadmap
 
 ### Phase 1 — AWS CLI hardening
+**Status:** Done
+
+Completed:
 - Improve policy-fix clarity and safety
 - Expand rule coverage
-- Improve trust policy analysis
 - Improve CI/CD integration outputs
 - Improve auditability and test coverage
-- Improve developer UX for local and CI use
+- Externalize rule/scoring/fix data into packaged files
+- Preserve CLI/API behavior while refactoring analyzer internals
+
+### Phase 1.5 — AWS catalog update workflow
+**Status:** Next
+
+Planned:
+- Add AWS catalog refresh script/workflow
+- Generate diffs for new or changed AWS actions
+- Surface unclassified actions for human review
+- Keep scoring and risk-tier assignment review-based, not fully automatic
 
 ### Phase 2 — Azure support and team workflows
 - Azure RBAC / Entra ID analysis
@@ -181,7 +218,7 @@ over:
 
 ---
 
-## 8. Core Principles
+## 9. Core Principles
 
 ### 1. Local-first by default
 Users should get useful results without needing a hosted account or API key.
@@ -206,7 +243,7 @@ The public CLI should solve real user problems before broader platform ambitions
 
 ---
 
-## 9. Coding Standards
+## 10. Coding Standards
 
 - PEP 484 type annotations on all functions
 - Google-style docstrings
@@ -219,10 +256,14 @@ The public CLI should solve real user problems before broader platform ambitions
 
 ---
 
-## 10. Maintainer Notes
+## 11. Maintainer Notes
 
 This public specification is intentionally focused on:
 - current product behavior
 - technical direction
 - output quality
 - safety principles
+
+Additional current note:
+- The packaged `aws_catalog.json` is currently a placeholder data layer for future update workflows.
+- The next meaningful backend step is AWS catalog sync + diff generation, not full automatic rule classification.

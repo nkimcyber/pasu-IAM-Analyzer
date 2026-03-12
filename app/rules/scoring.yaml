@@ -1,0 +1,19 @@
+{
+  "weights": {
+    "high_risk_action": 8,
+    "medium_risk_action": 4,
+    "resource_wildcard": 10,
+    "s3_all_buckets": 6,
+    "no_condition_sensitive": 5,
+    "not_action": 10,
+    "not_resource": 10,
+    "full_admin": 30,
+    "service_wildcard": 10
+  },
+  "bands": {
+    "low_max": 20,
+    "medium_max": 50
+  },
+  "score_cap": 100,
+  "structural_rule_count": 5
+}

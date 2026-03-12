@@ -1,0 +1,67 @@
+{
+  "service_readonly_actions": {
+    "s3": [
+      "s3:GetObject",
+      "s3:ListBucket",
+      "s3:GetBucketLocation"
+    ],
+    "iam": [
+      "iam:GetPolicy",
+      "iam:GetRole",
+      "iam:ListPolicies",
+      "iam:ListRoles"
+    ],
+    "ec2": [
+      "ec2:DescribeInstances",
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeVpcs"
+    ],
+    "lambda": [
+      "lambda:GetFunction",
+      "lambda:ListFunctions"
+    ],
+    "rds": [
+      "rds:DescribeDBInstances",
+      "rds:DescribeDBClusters"
+    ],
+    "dynamodb": [
+      "dynamodb:GetItem",
+      "dynamodb:Query",
+      "dynamodb:Scan"
+    ],
+    "kms": [
+      "kms:DescribeKey",
+      "kms:ListKeys"
+    ],
+    "secretsmanager": [
+      "secretsmanager:GetSecretValue",
+      "secretsmanager:ListSecrets",
+      "secretsmanager:DescribeSecret"
+    ],
+    "ssm": [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+      "ssm:DescribeParameters"
+    ],
+    "cloudwatch": [
+      "cloudwatch:GetMetricData",
+      "cloudwatch:ListMetrics"
+    ],
+    "logs": [
+      "logs:GetLogEvents",
+      "logs:DescribeLogGroups",
+      "logs:DescribeLogStreams"
+    ],
+    "sns": [
+      "sns:GetTopicAttributes",
+      "sns:ListTopics"
+    ],
+    "sqs": [
+      "sqs:GetQueueAttributes",
+      "sqs:ListQueues"
+    ],
+    "sts": [
+      "sts:GetCallerIdentity"
+    ]
+  }
+}

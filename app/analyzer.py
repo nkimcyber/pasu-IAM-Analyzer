@@ -26,149 +26,95 @@ logger = logging.getLogger(__name__)
 MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 4096
 
+# ── Externalized rule/config loading ─────────────────────────────────────────
+from pathlib import Path
+
+def _load_data_file(path: Path):
+    """Load JSON or JSON-compatible YAML config data from disk."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Required analyzer config file not found: {path}") from exc
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        try:
+            import yaml  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to parse analyzer config file: {path}. "
+                "Use JSON-compatible YAML or install PyYAML."
+            ) from exc
+        try:
+            return yaml.safe_load(text)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to parse analyzer config file: {path}") from exc
+
+
+def _discover_config_root() -> Path:
+    """Find the directory containing app/data and app/rules."""
+    env_root = os.getenv("PASU_CONFIG_ROOT")
+    if env_root:
+        candidate = Path(env_root).resolve()
+        if (candidate / "rules").exists() and (candidate / "data").exists():
+            return candidate
+        if (candidate / "app" / "rules").exists() and (candidate / "app" / "data").exists():
+            return candidate / "app"
+
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here,
+        here.parent,
+        Path.cwd() / "app",
+        Path.cwd(),
+    ]
+    for candidate in candidates:
+        if (candidate / "rules").exists() and (candidate / "data").exists():
+            return candidate
+    raise RuntimeError(
+        "Unable to locate analyzer config directories 'rules/' and 'data/'. "
+        "Expected them under app/ or set PASU_CONFIG_ROOT."
+    )
+
+
+def _load_rule_config() -> dict:
+    root = _discover_config_root()
+    risky = _load_data_file(root / "rules" / "risky_actions.yaml")
+    scoring = _load_data_file(root / "rules" / "scoring.yaml")
+    fix_profiles = _load_data_file(root / "rules" / "fix_profiles.yaml")
+    catalog = _load_data_file(root / "data" / "aws_catalog.json")
+    return {
+        "root": root,
+        "risky": risky,
+        "scoring": scoring,
+        "fix_profiles": fix_profiles,
+        "catalog": catalog,
+    }
+
+
+_RULE_CONFIG = _load_rule_config()
+_RISKY_CFG = _RULE_CONFIG["risky"]
+_SCORING_CFG = _RULE_CONFIG["scoring"]
+_FIX_CFG = _RULE_CONFIG["fix_profiles"]
+AWS_CATALOG = _RULE_CONFIG["catalog"]
+
 # ── Risk action lists ─────────────────────────────────────────────────────────
-
-HIGH_RISK_ACTIONS: set[str] = {
-    # IAM privilege escalation
-    "iam:passrole",
-    "iam:createpolicyversion",
-    "iam:setdefaultpolicyversion",
-    "iam:attachrolepolicy",
-    "iam:attachuserpolicy",
-    "iam:attachgrouppolicy",
-    "iam:putuserpolicy",
-    "iam:putrolepolicy",
-    "iam:createrole",
-    "iam:updateassumerolepolicy",
-    # S3 public exposure
-    "s3:putbucketpolicy",
-    "s3:putbucketacl",
-    "s3:putobjectacl",
-    # Arbitrary code execution
-    "lambda:createfunction",
-    "lambda:updatefunctioncode",
-    "ec2:runinstances",
-    # Org-level admin and data exfiltration
-    "organizations:*",
-    "kms:decrypt",
-    "kms:describekey",
-}
-
-MEDIUM_RISK_ACTIONS: set[str] = {
-    "sts:assumerole",
-    "iam:createaccesskey",
-    # Secret and config access
-    "secretsmanager:getsecretvalue",
-    "ssm:getparameter",
-    # Data exfiltration / reconnaissance
-    "rds:copydbsnapshot",
-    "ec2:describeinstances",
-}
-
-# Actions that are wildcards covering all IAM or all actions
+HIGH_RISK_ACTIONS: set[str] = set(_RISKY_CFG["high_risk_actions"])
+MEDIUM_RISK_ACTIONS: set[str] = set(_RISKY_CFG["medium_risk_actions"])
 WILDCARD_PREFIXES: tuple[str, ...] = ("iam:*", "*")
-
-# Context-dependent medium risk: only flagged when paired with Resource: *
-_CONTEXT_MEDIUM: dict[str, str] = {
-    "s3:getobject": (
-        "Read access to all S3 objects across all buckets in the account."
-    ),
-    "dynamodb:scan": (
-        "Scan access to all DynamoDB tables, exposing all stored data."
-    ),
-}
-
-# Number of structural rules (Categories 1 and 3) not captured in action sets.
-# Exported so the CLI banner can include them in the total rule count.
-STRUCTURAL_RULE_COUNT: int = 5  # R001, R002, R005, R006, R007
-
-# Minimal read-only replacements for service-level wildcards (e.g. "s3:*").
-# Used by fix_policy_local() to replace over-permissive service wildcards with
-# the smallest set of read actions that keeps the policy functional.
+_CONTEXT_MEDIUM: dict[str, str] = dict(_RISKY_CFG["context_medium_actions"])
+STRUCTURAL_RULE_COUNT: int = int(_SCORING_CFG.get("structural_rule_count", 5))
 SERVICE_READONLY_ACTIONS: dict[str, list[str]] = {
-    "s3": ["s3:GetObject", "s3:ListBucket", "s3:GetBucketLocation"],
-    "iam": ["iam:GetPolicy", "iam:GetRole", "iam:ListPolicies", "iam:ListRoles"],
-    "ec2": ["ec2:DescribeInstances", "ec2:DescribeSecurityGroups", "ec2:DescribeVpcs"],
-    "lambda": ["lambda:GetFunction", "lambda:ListFunctions"],
-    "rds": ["rds:DescribeDBInstances", "rds:DescribeDBClusters"],
-    "dynamodb": ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"],
-    "kms": ["kms:DescribeKey", "kms:ListKeys"],
-    "secretsmanager": [
-        "secretsmanager:GetSecretValue",
-        "secretsmanager:ListSecrets",
-        "secretsmanager:DescribeSecret",
-    ],
-    "ssm": ["ssm:GetParameter", "ssm:GetParameters", "ssm:DescribeParameters"],
-    "cloudwatch": ["cloudwatch:GetMetricData", "cloudwatch:ListMetrics"],
-    "logs": ["logs:GetLogEvents", "logs:DescribeLogGroups", "logs:DescribeLogStreams"],
-    "sns": ["sns:GetTopicAttributes", "sns:ListTopics"],
-    "sqs": ["sqs:GetQueueAttributes", "sqs:ListQueues"],
-    "sts": ["sts:GetCallerIdentity"],
+    svc: list(actions) for svc, actions in _FIX_CFG["service_readonly_actions"].items()
 }
-
-# Human-readable descriptions for known risky actions (used by analyze_policy_rules)
-_ACTION_DESCRIPTIONS: dict[str, str] = {
-    "iam:passrole": (
-        "Allows passing IAM roles to AWS services, enabling privilege escalation "
-        "to any role that can be passed."
-    ),
-    "iam:createpolicyversion": (
-        "Can create a new policy version with elevated permissions and set it as default."
-    ),
-    "iam:setdefaultpolicyversion": (
-        "Can activate a previously created permissive policy version."
-    ),
-    "iam:attachrolepolicy": "Can attach admin-level managed policies to any role.",
-    "iam:attachuserpolicy": "Can attach admin-level managed policies to any user.",
-    "iam:attachgrouppolicy": "Can attach admin-level managed policies to any group.",
-    "iam:putrolepolicy": "Can inject an inline policy granting elevated permissions to any role.",
-    "iam:createrole": "Can create roles with arbitrary permissions and assume them.",
-    "iam:updateassumerolepolicy": (
-        "Can modify a role's trust policy to allow any principal to assume it."
-    ),
-    "s3:putbucketpolicy": (
-        "Can overwrite a bucket policy to make it publicly accessible or grant "
-        "cross-account access."
-    ),
-    "s3:putbucketacl": "Can change a bucket's ACL to make it publicly readable or writable.",
-    "s3:putobjectacl": "Can expose individual S3 objects to the public by modifying their ACLs.",
-    "lambda:createfunction": (
-        "Can deploy arbitrary code as a Lambda function with any specified execution role."
-    ),
-    "lambda:updatefunctioncode": (
-        "Can replace the code of a running Lambda function with arbitrary code."
-    ),
-    "ec2:runinstances": (
-        "Can launch EC2 instances with a specified IAM role, executing code with that "
-        "role's permissions."
-    ),
-    "organizations:*": (
-        "Grants full control over the AWS Organization, including creating and "
-        "managing member accounts."
-    ),
-    "kms:decrypt": (
-        "Can decrypt any data encrypted under accessible KMS keys, enabling data exfiltration."
-    ),
-    "kms:describekey": (
-        "Can enumerate KMS key metadata, useful for identifying encryption keys to target."
-    ),
-    "sts:assumerole": (
-        "Can assume IAM roles, potentially gaining permissions beyond the current principal."
-    ),
-    "iam:createaccesskey": "Can create persistent access key credentials for any IAM user.",
-    "secretsmanager:getsecretvalue": (
-        "Can retrieve any secret value from AWS Secrets Manager, including credentials."
-    ),
-    "ssm:getparameter": (
-        "Can read any SSM parameter, including SecureString parameters containing secrets."
-    ),
-    "rds:copydbsnapshot": (
-        "Can copy RDS snapshots to another account, potentially exfiltrating database contents."
-    ),
-    "ec2:describeinstances": (
-        "Enables discovery of all EC2 instances in the account, facilitating reconnaissance."
-    ),
+_ACTION_DESCRIPTIONS: dict[str, str] = dict(_RISKY_CFG["action_descriptions"])
+_SCORE_WEIGHTS: dict[str, int] = {
+    k: int(v) for k, v in _SCORING_CFG["weights"].items()
 }
+_SCORE_BANDS: dict[str, int] = {
+    k: int(v) for k, v in _SCORING_CFG["bands"].items()
+}
+_SCORE_CAP: int = int(_SCORING_CFG.get("score_cap", 100))
 
 # ── Plain-English lookup tables (used by explain_policy_local) ────────────────
 
@@ -777,10 +723,10 @@ def calculate_risk_score(policy_json: str) -> int:
 
         # R006: NotAction inverse grant
         if has_not_action:
-            score += 10
+            score += _SCORE_WEIGHTS["not_action"]
         # R007: NotResource inverse grant
         if has_not_resource:
-            score += 10
+            score += _SCORE_WEIGHTS["not_resource"]
 
         if has_not_action:
             continue  # cannot evaluate specific actions further
@@ -801,14 +747,14 @@ def calculate_risk_score(policy_json: str) -> int:
 
         # Full admin bonus: Action:* with Resource:*
         if has_full_wildcard_action and has_full_wildcard_resource:
-            score += 30
+            score += _SCORE_WEIGHTS["full_admin"]
 
         # Service wildcard bonus: +10 per service:* (not counting the bare "*")
         service_wildcards = {
             action for action in actions_lower
             if action != "*" and action.endswith(":*")
         }
-        score += len(service_wildcards) * 10
+        score += len(service_wildcards) * _SCORE_WEIGHTS["service_wildcard"]
 
         # Action-based scoring: +8 per HIGH, +4 per MEDIUM
         if has_full_wildcard_action:
@@ -842,17 +788,17 @@ def calculate_risk_score(policy_json: str) -> int:
                         if action.startswith(f"{svc}:")
                     }
 
-        score += len(matched_high) * 8
-        score += len(matched_medium) * 4
+        score += len(matched_high) * _SCORE_WEIGHTS["high_risk_action"]
+        score += len(matched_medium) * _SCORE_WEIGHTS["medium_risk_action"]
 
         # Structural rule scoring
         # R001: Unrestricted resource
         if has_full_wildcard_resource:
-            score += 10
+            score += _SCORE_WEIGHTS["resource_wildcard"]
 
         # R002: Access to all S3 buckets
         if resources_set & _S3_ALL:
-            score += 6
+            score += _SCORE_WEIGHTS["s3_all_buckets"]
 
         # R005: Sensitive action without Condition
         has_sensitive = (
@@ -866,9 +812,9 @@ def calculate_risk_score(policy_json: str) -> int:
             )
         )
         if has_sensitive and not condition:
-            score += 5
+            score += _SCORE_WEIGHTS["no_condition_sensitive"]
 
-    return min(score, 100)
+    return min(score, _SCORE_CAP)
 
 
 def risk_score_label(score: int) -> str:
@@ -880,11 +826,17 @@ def risk_score_label(score: int) -> str:
     Returns:
         'Low', 'Medium', or 'High'.
     """
-    if score <= 20:
+    if score <= _SCORE_BANDS["low_max"]:
         return "Low"
-    if score <= 50:
+    if score <= _SCORE_BANDS["medium_max"]:
         return "Medium"
     return "High"
+
+
+def _max_risk_level(*levels: str) -> str:
+    """Return the highest risk level among Low/Medium/High values."""
+    order = {"Low": 0, "Medium": 1, "High": 2}
+    return max(levels, key=lambda lvl: order.get(lvl, -1))
 
 
 def explain_policy_local(policy_json: str) -> ExplainResult:
@@ -965,7 +917,7 @@ def escalate_policy_local(policy_json: str) -> EscalationResult:
     # Structural rule engine — all three categories
     rule_findings = analyze_policy_rules(policy_json)
 
-    # Risk score is the source of truth for displayed risk level
+    # Preserve action-based High findings while still reporting the numeric score.
     risk_score = calculate_risk_score(policy_json)
     risk_level = risk_score_label(risk_score)
 
@@ -1145,7 +1097,7 @@ def fix_policy_local(policy_json: str) -> FixResult:
             if not fixed_actions:
                 fixed_actions = ["TODO:specify-needed-actions"]
                 manual_review_needed.append(
-                    f"{statement_label} had all high-risk actions removed. "
+                    f"{statement_label} had all actions removed. "
                     "Manual review required. "
                     'Replace "TODO:specify-needed-actions" with the minimum safe actions this policy needs.'
                 )

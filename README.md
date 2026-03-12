@@ -12,6 +12,7 @@ Pasu is a lightweight CLI tool that scans IAM policy JSON for security risks and
 
 ### Auto-fix dangerous policies
 ![Pasu Demo - Fix Policy](docs/demo3.gif)
+
 ---
 
 ## Install
@@ -43,7 +44,7 @@ Translates IAM policy JSON into plain English that non-technical stakeholders ca
 pasu escalate --file policy.json
 ```
 
-Scans for 30+ risky patterns including privilege escalation, public S3 exposure, dangerous Lambda/EC2/KMS actions, and structural anti-patterns. Shows a risk score (0-100) with visual bar.
+Scans for risky IAM actions and structural anti-patterns. Shows a risk score (0-100) with a visual bar.
 
 ### Generate a safer proposed policy
 ```bash
@@ -51,11 +52,12 @@ pasu fix --file policy.json
 ```
 
 Generates a safer proposed policy and explains what still needs manual review:
-- Removes dangerous actions (iam:PassRole, etc.)
-- Replaces service wildcards (s3:*) with read-only equivalents
-- Flags Resource:* for manual scoping
-- Shows risk score before and after the fix
-- Preserves Deny statements
+- Removes dangerous high-risk actions when Pasu can do so safely
+- Replaces service wildcards (for example `s3:*`) with safer read-only equivalents when a fix profile exists
+- Flags `Resource: "*"` for manual scoping
+- Preserves `Deny` statements
+- Shows risk score before and after the proposed fix
+- Leaves some medium-risk actions in place when auto-removing them would be unsafe or too context-dependent
 
 Save the proposed policy to a file:
 ```bash
@@ -83,20 +85,20 @@ The `--ai` flag enables Claude-powered natural language explanations with specif
 
 **Medium Risk (6 rules):**
 - sts:AssumeRole, iam:CreateAccessKey
-- Data access: s3:GetObject (with Resource:*), dynamodb:Scan (with Resource:*)
+- Data access: s3:GetObject (with `Resource: "*"`) , dynamodb:Scan (with `Resource: "*"`)
 - Secrets access: secretsmanager:GetSecretValue, ssm:GetParameter
 - Reconnaissance: ec2:DescribeInstances
 - Data exfiltration: rds:CopyDBSnapshot
 
 **Structural Rules (5 rules):**
 - Unrestricted resource access (`"Resource": "*"` on any action)
-- Inverse action grants (`NotAction` — allows everything EXCEPT listed actions)
+- Inverse action grants (`NotAction` — allows everything except listed actions)
 - Inverse resource grants (`NotResource`)
 - Sensitive actions with no `Condition` block
 - Wildcard service grants (`"s3:*"`, `"iam:*"`, etc.)
 
 **With `--ai` flag:**
-- Detailed escalation path analysis (e.g., User → PassRole → EC2 → Admin Role)
+- Detailed escalation path analysis
 - Plain English explanation of each finding
 - Specific remediation suggestions
 
@@ -108,7 +110,18 @@ Pasu uses a two-step analysis approach:
 
 1. **Local detection (free, instant):** Rule-based scanning checks for known dangerous IAM action patterns and overly permissive policies. No network calls, no API keys.
 
-2. **AI analysis (optional, `--ai`):** When risky actions are found, Claude AI provides detailed natural language explanations of *why* each permission is dangerous and *how* to fix it. Claude is only called when the local scan finds something — no unnecessary API costs.
+2. **AI analysis (optional, `--ai`):** When risky actions are found, Claude AI provides detailed natural language explanations of *why* each permission is dangerous and *how* to fix it. Claude is only called when the local scan finds something.
+
+### Rule data and scoring
+Pasu's local analyzer now loads its detection data from package-managed rule files instead of hardcoding everything directly in `analyzer.py`.
+
+Current packaged rule/config files:
+- `app/rules/risky_actions.yaml`
+- `app/rules/scoring.yaml`
+- `app/rules/fix_profiles.yaml`
+- `app/data/aws_catalog.json`
+
+This makes rule updates safer, easier to review, and easier to extend in later phases.
 
 ---
 
@@ -117,14 +130,16 @@ Pasu uses a two-step analysis approach:
 - [x] CLI tool with local + AI analysis
 - [x] PyPI package (`pip install pasu`)
 - [x] More detection rules (S3 public access, cross-account trust)
-- [x] Output formats (--format json / table / sarif)
+- [x] Output formats (`--format json / table / sarif`)
 - [x] `pasu fix` — generate safer proposed policies with manual review guidance
+- [x] Externalized rule/scoring/fix data (`app/rules`, `app/data`)
+- [ ] AWS catalog sync + diff workflow
 - [ ] Interactive shell mode
 - [ ] Azure RBAC / Entra ID support
 - [ ] GCP IAM support
 - [ ] Team dashboard with shared reports
 
-See [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) for the full roadmap.
+See [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) for the fuller roadmap and product direction.
 
 ---
 
@@ -163,6 +178,12 @@ pasu scan --file policy.json --format sarif > results.sarif
 Upload the `.sarif` file with the `github/codeql-action/upload-sarif` action and findings will appear in the **Security → Code scanning** tab of your repository, with severity levels mapped automatically (`High` → error, `Medium` → warning).
 
 See [examples/github-actions-workflow.yml](examples/github-actions-workflow.yml) for a ready-to-use GitHub Actions workflow.
+
+---
+
+## Development Notes
+
+Recent analyzer refactor work focused on keeping the public CLI/API behavior stable while moving rule data out of code. The current package still uses a placeholder `aws_catalog.json`; automated AWS catalog refresh and diff generation are planned next.
 
 ---
 
