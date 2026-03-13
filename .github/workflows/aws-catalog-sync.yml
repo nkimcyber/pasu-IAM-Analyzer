@@ -1,0 +1,136 @@
+name: AWS Catalog Sync
+
+on:
+  push:
+    branches:
+      - feature/aws-catalog-sync
+  workflow_dispatch:
+  schedule:
+    # Sunday 13:00 UTC ~= 9:00 AM US Eastern during DST
+    - cron: "0 13 * * 0"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  PYTHON_VERSION: "3.11.9"
+  SYNC_BRANCH_PREFIX: "bot/aws-catalog-sync"
+
+jobs:
+  sync-catalog:
+    name: Sync AWS catalog snapshot
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run AWS catalog sync
+        run: python scripts/sync_aws_catalog.py --write
+
+      - name: Validate canonical catalog
+        run: |
+          python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          path = Path("app/data/aws_catalog.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          actions = sorted(data["actions"].keys())
+
+          if not actions:
+              raise SystemExit("Validation failed: catalog contains zero actions.")
+
+          required = {"iam:PassRole", "s3:GetObject", "ec2:RunInstances", "rds-db:connect"}
+          missing = sorted([k for k in required if k not in data["actions"]])
+          if missing:
+              raise SystemExit(f"Validation failed: missing required actions: {missing}")
+
+          bad = []
+          for action in actions:
+              if ":" not in action:
+                  bad.append(action)
+                  continue
+              svc, name = action.split(":", 1)
+              if (
+                  not re.match(r"^[a-z0-9-]+$", svc)
+                  or not re.match(r"^[A-Za-z][A-Za-z0-9]+$", name)
+                  or "${" in name
+                  or "<" in name
+                  or ">" in name
+                  or "/" in name
+              ):
+                  bad.append(action)
+
+          if bad:
+              raise SystemExit(
+                  "Validation failed: suspicious action keys present: "
+                  + ", ".join(bad[:25])
+              )
+
+          print(f"Validation passed. total_actions={len(actions)}")
+          PY
+
+      - name: Upload diff artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aws-catalog-sync-reports
+          path: |
+            app/data/aws_catalog.json
+            reports/aws_catalog_diff.json
+            reports/aws_catalog_diff.md
+          if-no-files-found: error
+
+      - name: Detect changed files
+        id: changes
+        run: |
+          git status --short
+          if git diff --quiet -- app/data/aws_catalog.json; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stop on feature-branch push after validation
+        if: github.event_name == 'push'
+        run: echo "Feature branch push run completed. No PR will be created."
+
+      - name: Create pull request for catalog update
+        if: steps.changes.outputs.has_changes == 'true' && github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH_NAME="${SYNC_BRANCH_PREFIX}-$(date -u +%Y%m%d-%H%M%S)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH_NAME"
+          git add app/data/aws_catalog.json
+          git commit -m "chore: refresh AWS catalog snapshot"
+          git push --set-upstream origin "$BRANCH_NAME"
+
+          gh pr create \
+            --base main \
+            --head "$BRANCH_NAME" \
+            --title "chore: refresh AWS catalog snapshot" \
+            --body "Automated AWS catalog refresh.
+
+          This PR updates:
+          - app/data/aws_catalog.json
+
+          Diff reports are attached as workflow artifacts."
