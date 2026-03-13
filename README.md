@@ -113,7 +113,7 @@ Pasu uses a two-step analysis approach:
 2. **AI analysis (optional, `--ai`):** When risky actions are found, Claude AI provides detailed natural language explanations of *why* each permission is dangerous and *how* to fix it. Claude is only called when the local scan finds something.
 
 ### Rule data and scoring
-Pasu's local analyzer now loads its detection data from package-managed rule files instead of hardcoding everything directly in `analyzer.py`.
+Pasu's local analyzer loads its detection data from package-managed rule files instead of hardcoding everything directly in `analyzer.py`.
 
 Current packaged rule/config files:
 - `app/rules/risky_actions.yaml`
@@ -122,6 +122,24 @@ Current packaged rule/config files:
 - `app/data/aws_catalog.json`
 
 This makes rule updates safer, easier to review, and easier to extend in later phases.
+
+### AWS catalog sync foundation
+Pasu now includes a local AWS catalog sync foundation script:
+- `scripts/sync_aws_catalog.py`
+
+Current behavior:
+- Uses the AWS Service Authorization Reference as the source of truth
+- Builds a canonical `app/data/aws_catalog.json` snapshot
+- Generates diff reports for review at:
+  - `reports/aws_catalog_diff.json`
+  - `reports/aws_catalog_diff.md`
+- Surfaces `new_unclassified_actions`, `services_with_new_unclassified_actions`, and `count_summary`
+
+Current scope:
+- Local script workflow is implemented and validated
+- Canonical AWS catalog snapshot is committed to the repo
+- GitHub Actions scheduling is the next step
+- Risk-tier assignment remains review-based, not fully automatic
 
 ---
 
@@ -133,7 +151,8 @@ This makes rule updates safer, easier to review, and easier to extend in later p
 - [x] Output formats (`--format json / table / sarif`)
 - [x] `pasu fix` — generate safer proposed policies with manual review guidance
 - [x] Externalized rule/scoring/fix data (`app/rules`, `app/data`)
-- [ ] AWS catalog sync + diff workflow
+- [x] AWS catalog sync + canonical snapshot foundation
+- [ ] GitHub Actions scheduled AWS catalog sync + diff workflow
 - [ ] Interactive shell mode
 - [ ] Azure RBAC / Entra ID support
 - [ ] GCP IAM support
@@ -183,7 +202,7 @@ See [examples/github-actions-workflow.yml](examples/github-actions-workflow.yml)
 
 ## Development Notes
 
-Recent analyzer refactor work focused on keeping the public CLI/API behavior stable while moving rule data out of code. The current package still uses a placeholder `aws_catalog.json`; automated AWS catalog refresh and diff generation are planned next.
+Recent analyzer refactor work kept the public CLI/API behavior stable while moving rule data out of code. The next backend step is not another large analyzer rewrite — it is automating the AWS catalog sync workflow in GitHub Actions so catalog refresh, diff generation, and human review happen on a schedule.
 
 ---
 

@@ -212,4 +212,6 @@ test_*.json
 demo_*.json
 
 prompts/
+scripts/debug_agent
 docs/workflow.md
+reports/

@@ -27,7 +27,7 @@ Pasu should be useful on day one:
 
 ---
 
-## 2. Current State (post-Phase 1 externalization)
+## 2. Current State (post-Phase 1 and local Phase 1.5 foundation)
 
 **PyPI:** `https://pypi.org/project/pasu/`  
 **Install:** `pip install pasu`
@@ -63,6 +63,8 @@ Pasu should be useful on day one:
 - PyPI published
 - Example GitHub Actions workflow for users
 - Rule/scoring/fix data externalized into packaged config files
+- Canonical AWS action catalog snapshot stored in-repo
+- Local AWS catalog sync/diff script implemented and validated
 
 ---
 
@@ -84,13 +86,71 @@ Phase 1 moved the local analyzer away from a fully hardcoded rule layout.
 - CLI and API contracts remain stable
 
 ### What Phase 1 did **not** do
-- It did not add a live AWS catalog sync job
+- It did not add a live account audit mode
 - It did not auto-classify new AWS actions into risk tiers
-- It did not change Pasu into a full live-account audit platform
+- It did not change Pasu into a hosted cloud platform
 
 ---
 
-## 4. What `pasu fix` does today
+## 4. AWS Catalog Sync Foundation
+
+Phase 1.5 adds the local foundation for keeping packaged AWS action metadata current.
+
+### Source of truth
+- **AWS Service Authorization Reference only**
+- No secondary source is currently used
+
+### Canonical snapshot
+- `app/data/aws_catalog.json`
+
+### Schema v1
+Top-level structure:
+- `version`
+- `generated_at`
+- `source`
+- `actions`
+
+Each action entry stores:
+- `service`
+- `name`
+- `access_level`
+- `resource_types`
+- `condition_keys`
+- `dependent_actions`
+
+### Current local sync script
+- `scripts/sync_aws_catalog.py`
+
+### Current script behavior
+- Fetches AWS Service Authorization Reference index and service pages
+- Discovers service prefixes
+- Extracts action metadata into schema v1
+- Writes canonical snapshot to `app/data/aws_catalog.json`
+- Generates review reports:
+  - `reports/aws_catalog_diff.json`
+  - `reports/aws_catalog_diff.md`
+
+### Current diff/report behavior
+Tracks:
+- new actions
+- removed actions
+- changed access levels
+- changed resource types
+- changed condition keys
+- changed dependent actions
+
+Also reports:
+- `new_unclassified_actions`
+- `services_with_new_unclassified_actions`
+- `count_summary`
+
+### Important current boundary
+This foundation is intentionally **review-based**.
+It does **not** automatically assign new AWS actions into Pasu's high/medium/context risk tiers.
+
+---
+
+## 5. What `pasu fix` does today
 
 `pasu fix` is intentionally conservative.
 
@@ -129,7 +189,7 @@ The output from `pasu fix` is designed to be:
 
 ---
 
-## 5. Example `pasu fix` behavior
+## 6. Example `pasu fix` behavior
 
 A typical `pasu fix` result may:
 - remove `iam:PassRole`
@@ -153,7 +213,7 @@ over:
 
 ---
 
-## 6. Not Yet Built
+## 7. Not Yet Built
 
 - Azure support
 - GCP support
@@ -167,7 +227,7 @@ over:
 
 ---
 
-## 7. Tech Stack
+## 8. Tech Stack
 
 | Component | Technology |
 |---|---|
@@ -183,7 +243,7 @@ over:
 
 ---
 
-## 8. Near-Term Technical Roadmap
+## 9. Near-Term Technical Roadmap
 
 ### Phase 1 — AWS CLI hardening
 **Status:** Done
@@ -197,13 +257,23 @@ Completed:
 - Preserve CLI/API behavior while refactoring analyzer internals
 
 ### Phase 1.5 — AWS catalog update workflow
-**Status:** Next
+**Status:** In progress
 
-Planned:
-- Add AWS catalog refresh script/workflow
-- Generate diffs for new or changed AWS actions
-- Surface unclassified actions for human review
-- Keep scoring and risk-tier assignment review-based, not fully automatic
+Completed locally:
+- Defined AWS catalog source strategy
+- Defined schema v1 for canonical action metadata
+- Implemented local sync script
+- Implemented canonical snapshot writing
+- Implemented diff report generation
+- Implemented unclassified action reporting
+- Validated local `--dry-run` and `--write`
+- Validated action-only precision for canonical snapshot
+
+Still remaining:
+- Add GitHub Actions workflow for scheduled execution
+- Test workflow on branch push
+- Connect default-branch scheduled sync
+- Decide PR/issue automation strategy for review workflow
 
 ### Phase 2 — Azure support and team workflows
 - Azure RBAC / Entra ID analysis
@@ -218,7 +288,7 @@ Planned:
 
 ---
 
-## 9. Core Principles
+## 10. Core Principles
 
 ### 1. Local-first by default
 Users should get useful results without needing a hosted account or API key.
@@ -243,7 +313,7 @@ The public CLI should solve real user problems before broader platform ambitions
 
 ---
 
-## 10. Coding Standards
+## 11. Coding Standards
 
 - PEP 484 type annotations on all functions
 - Google-style docstrings
@@ -256,7 +326,7 @@ The public CLI should solve real user problems before broader platform ambitions
 
 ---
 
-## 11. Maintainer Notes
+## 12. Maintainer Notes
 
 This public specification is intentionally focused on:
 - current product behavior
@@ -264,6 +334,7 @@ This public specification is intentionally focused on:
 - output quality
 - safety principles
 
-Additional current note:
-- The packaged `aws_catalog.json` is currently a placeholder data layer for future update workflows.
-- The next meaningful backend step is AWS catalog sync + diff generation, not full automatic rule classification.
+Additional current notes:
+- `app/data/aws_catalog.json` is now a real canonical snapshot, not just a placeholder layer.
+- The next meaningful backend step is GitHub Actions automation for scheduled AWS catalog refresh and diff generation.
+- Risk-tier assignment for new AWS actions remains intentionally human-reviewed.
