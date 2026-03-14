@@ -152,7 +152,7 @@ Current scope:
 - [x] `pasu fix` — generate safer proposed policies with manual review guidance
 - [x] Externalized rule/scoring/fix data (`app/rules`, `app/data`)
 - [x] AWS catalog sync + canonical snapshot foundation
-- [ ] GitHub Actions scheduled AWS catalog sync + diff workflow
+- [x] GitHub Actions scheduled AWS catalog sync + diff workflow
 - [ ] Interactive shell mode
 - [ ] Azure RBAC / Entra ID support
 - [ ] GCP IAM support
