@@ -15,7 +15,7 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.11.9"
-  SYNC_BRANCH_PREFIX: "bot/aws-catalog-sync"
+  SYNC_BRANCH_NAME: "bot/aws-catalog-sync"
 
 jobs:
   sync-catalog:
@@ -28,7 +28,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python ${{ env.PYTHON_VERSION }}
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -100,7 +100,6 @@ jobs:
       - name: Detect changed files
         id: changes
         run: |
-          git status --short
           if git diff --quiet -- app/data/aws_catalog.json; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
@@ -111,24 +110,38 @@ jobs:
         if: github.event_name == 'push'
         run: echo "Feature branch push run completed. No PR will be created."
 
-      - name: Create pull request for catalog update
+      - name: Stop if there are no catalog changes
+        if: steps.changes.outputs.has_changes != 'true' && github.event_name != 'push'
+        run: echo "No canonical catalog changes detected. No branch or PR update required."
+
+      - name: Update fixed bot branch
+        if: steps.changes.outputs.has_changes == 'true' && github.event_name != 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Start from the current default-branch workflow commit state.
+          git checkout -B "${SYNC_BRANCH_NAME}"
+
+          git add app/data/aws_catalog.json
+          git commit -m "chore: refresh AWS catalog snapshot"
+
+          # Reuse one fixed bot branch instead of creating timestamped branches.
+          git push --force-with-lease origin "${SYNC_BRANCH_NAME}"
+
+      - name: Create or reuse pull request
         if: steps.changes.outputs.has_changes == 'true' && github.event_name != 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          BRANCH_NAME="${SYNC_BRANCH_PREFIX}-$(date -u +%Y%m%d-%H%M%S)"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH_NAME"
-          git add app/data/aws_catalog.json
-          git commit -m "chore: refresh AWS catalog snapshot"
-          git push --set-upstream origin "$BRANCH_NAME"
+          EXISTING_PR="$(gh pr list --base main --head "${SYNC_BRANCH_NAME}" --state open --json number --jq '.[0].number')"
 
-          gh pr create \
-            --base main \
-            --head "$BRANCH_NAME" \
-            --title "chore: refresh AWS catalog snapshot" \
-            --body "Automated AWS catalog refresh.
+          if [ -n "${EXISTING_PR}" ]; then
+            echo "Open PR already exists: #${EXISTING_PR}"
+            exit 0
+          fi
+
+          gh pr create             --base main             --head "${SYNC_BRANCH_NAME}"             --title "chore: refresh AWS catalog snapshot"             --body "Automated AWS catalog refresh.
 
           This PR updates:
           - app/data/aws_catalog.json
