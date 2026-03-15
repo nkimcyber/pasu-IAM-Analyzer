@@ -28,6 +28,13 @@ classifiers = [
     "Topic :: Security",
 ]
 
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "jsonschema",
+]
+
 [project.urls]
 Homepage = "https://github.com/nkimcyber/pasu"
 Repository = "https://github.com/nkimcyber/pasu"
