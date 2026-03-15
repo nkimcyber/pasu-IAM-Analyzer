@@ -47,17 +47,17 @@ Requires Python 3.11+. Pasu runs locally by default and does not require an API 
 ### Typical Pasu output
 
 ```text
-Privilege Escalation Report
+Risk Level  Medium
 
-Risk Level  High
-Risk Score  60+/100
-
-Confirmed Risky Actions
-  • iam:PassRole
-  • ec2:RunInstances
+Risk Score  ██████░░░░░░░░░░░░░░ 31/100 (Medium)
 
 Summary
-  High privilege escalation risk detected. This policy can delegate a role and launch compute with that role.
+  Medium privilege escalation risk: 2 reviewed high-risk action(s) detected, 1 composite attack pattern(s) matched, 4 rule finding(s) total. Run with --ai for detailed analysis.
+
+Confirmed Risky Actions
+  Reviewed classification — confirmed dangerous by security research:
+  • ec2:runinstances
+  • iam:passrole
 ```
 
 Why this matters:
