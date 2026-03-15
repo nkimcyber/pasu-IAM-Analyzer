@@ -1,208 +1,282 @@
-# Pasu - IAM Analyzer
+# Pasu — AWS IAM Security Analyzer
 
-**A lightweight CLI to analyze AWS IAM policies, explain risky access in plain English, and generate safer proposed policies.**
+Detect risky AWS IAM permissions in seconds.
 
-Pasu is a lightweight CLI tool that scans IAM policy JSON for security risks and explains them in plain English. No account setup, no cloud agent, no sales call — just `pip install pasu` and go.
+Pasu is a local-first CLI that helps you review IAM policies without standing up cloud infrastructure, connecting an account, or buying a platform. It explains what a policy actually does, flags risky patterns such as privilege escalation, and generates a safer proposed policy with explicit manual-review guidance. Pasu ships as a PyPI package, runs locally by default, supports optional AI analysis, and includes JSON/SARIF output for automation and CI/CD workflows.
 
-### Pasu in Action
-![Pasu Demo](docs/demo_pasu_combined.gif)
+## Why use Pasu?
+
+- **Catch privilege escalation fast** — detect risky actions and overly permissive IAM patterns before they ship. Pasu’s local mode currently includes 30 detection rules: 19 high-risk, 6 medium-risk, and 5 structural rules.
+- **Explain IAM in plain English** — turn raw policy JSON into output that is easier to review and easier to share with non-IAM specialists. `pasu explain` is built for this exact use case.
+- **Generate a safer proposal** — `pasu fix` produces a safer proposed policy, keeps risky unknowns visible, and tells you what still needs manual review instead of pretending to fully auto-remediate.
+- **Use it locally or in CI** — Pasu supports `--format json` and `--format sarif`, and the project already includes a GitHub Actions workflow example for Code Scanning integration.
 
 ---
 
-## Install
+## 10-second Quick Start
 
 ```bash
 pip install pasu
+pasu scan --file policy.json
 ```
 
-Requires Python 3.11+
+Requires Python 3.11+. Pasu runs locally by default and does not require an API key unless you choose `--ai`.
 
-## Usage
+---
 
-### Scan a policy (local analysis, no API key needed)
+## Example
+
+### Example policy
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "iam:PassRole",
+        "ec2:RunInstances"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+### Typical Pasu output
+
+```text
+Privilege Escalation Report
+
+Risk Level  High
+Risk Score  60+/100
+
+Confirmed Risky Actions
+  • iam:PassRole
+  • ec2:RunInstances
+
+Summary
+  High privilege escalation risk detected. This policy can delegate a role and launch compute with that role.
+```
+
+Why this matters:
+
+- `iam:PassRole` is a core privilege-delegation primitive.
+- `ec2:RunInstances` can launch compute with an attached IAM role.
+- Together, that combination maps to Pasu’s reviewed composite detection for **Privilege Escalation via EC2 Compute**.
+
+---
+
+## Commands
+
+### Scan a policy
+
 ```bash
 pasu scan --file policy.json
 ```
 
-Runs both explain and escalate together. Shows a combined report with risk score, detected risky actions, and plain English explanations.
+Runs both explain and escalate together. This is the fastest way to understand what a policy allows and whether it introduces risky access. `scan` is one of Pasu’s primary CLI commands.
 
 ### Explain what a policy does
+
 ```bash
 pasu explain --file policy.json
 ```
 
-Translates IAM policy JSON into plain English that non-technical stakeholders can understand. Example: `"Action": "s3:PutBucketPolicy"` becomes "ALLOWS changing bucket security policy on all resources."
+Translates IAM policy JSON into plain English. This is useful when you need to review permissions quickly or show the result to non-technical stakeholders.
 
 ### Check for privilege escalation risks
+
 ```bash
 pasu escalate --file policy.json
 ```
 
-Scans for risky IAM actions and structural anti-patterns. Shows a risk score (0-100) with a visual bar.
+Scans for risky IAM actions and structural anti-patterns, then returns a risk level and risk score. The score is a numeric 0–100 value and the CLI shows a visual risk bar.
 
 ### Generate a safer proposed policy
+
 ```bash
 pasu fix --file policy.json
 ```
 
-Generates a safer proposed policy and explains what still needs manual review:
-- Removes dangerous high-risk actions when Pasu can do so safely
-- Replaces service wildcards (for example `s3:*`) with safer read-only equivalents when a fix profile exists
-- Flags `Resource: "*"` for manual scoping
-- Preserves `Deny` statements
-- Shows risk score before and after the proposed fix
-- Leaves some medium-risk actions in place when auto-removing them would be unsafe or too context-dependent
+Pasu does **not** claim to produce a perfect least-privilege policy automatically. Instead, it generates a safer proposed policy, removes obvious high-risk actions when safe, preserves important context, and surfaces manual review where automation would be misleading.
 
-Save the proposed policy to a file:
+Save the result to a file:
+
 ```bash
 pasu fix --file policy.json --output fixed_policy.json
 ```
 
-### Get AI-powered detailed analysis
+### Get AI-powered analysis
+
 ```bash
 export ANTHROPIC_API_KEY="sk-..."
 pasu scan --file policy.json --ai
 ```
 
-The `--ai` flag enables Claude-powered natural language explanations with specific remediation guidance. Without it, Pasu runs entirely locally at zero cost.
-
-## What Pasu Detects
-
-**High Risk (19 rules):**
-- Wildcard actions (`"Action": "*"`) and wildcard resources (`"Resource": "*"`)
-- IAM privilege escalation: iam:PassRole, iam:CreatePolicyVersion, iam:AttachRolePolicy, iam:AttachGroupPolicy, iam:PutRolePolicy, iam:CreateRole, iam:PutGroupPolicy, iam:AddUserToGroup, iam:AttachUserPolicy, iam:PutUserPolicy, iam:CreateLoginProfile, iam:UpdateLoginProfile, iam:SetDefaultPolicyVersion, iam:UpdateAssumeRolePolicy
-- S3 public exposure: s3:PutBucketPolicy, s3:PutBucketAcl, s3:PutObjectAcl
-- Code execution: lambda:CreateFunction, lambda:UpdateFunctionCode
-- Infrastructure control: ec2:RunInstances
-- Organization admin: organizations:*
-- Encryption keys: kms:Decrypt
-
-**Medium Risk (6 rules):**
-- sts:AssumeRole, iam:CreateAccessKey
-- Data access: s3:GetObject (with `Resource: "*"`) , dynamodb:Scan (with `Resource: "*"`)
-- Secrets access: secretsmanager:GetSecretValue, ssm:GetParameter
-- Reconnaissance: ec2:DescribeInstances
-- Data exfiltration: rds:CopyDBSnapshot
-
-**Structural Rules (5 rules):**
-- Unrestricted resource access (`"Resource": "*"` on any action)
-- Inverse action grants (`NotAction` — allows everything except listed actions)
-- Inverse resource grants (`NotResource`)
-- Sensitive actions with no `Condition` block
-- Wildcard service grants (`"s3:*"`, `"iam:*"`, etc.)
-
-**With `--ai` flag:**
-- Detailed escalation path analysis
-- Plain English explanation of each finding
-- Specific remediation suggestions
+The `--ai` flag enables Claude-powered natural-language explanations and deeper remediation guidance. Pasu still performs local analysis first; AI is optional.
 
 ---
 
-## How It Works
+## What Pasu detects
 
-Pasu uses a two-step analysis approach:
+### High-risk patterns
 
-1. **Local detection (free, instant):** Rule-based scanning checks for known dangerous IAM action patterns and overly permissive policies. No network calls, no API keys.
+Pasu’s local analyzer looks for high-risk permissions and structures such as:
 
-2. **AI analysis (optional, `--ai`):** When risky actions are found, Claude AI provides detailed natural language explanations of *why* each permission is dangerous and *how* to fix it. Claude is only called when the local scan finds something.
+- wildcard actions like `"Action": "*"`
+- wildcard resources like `"Resource": "*"`
+- IAM privilege-escalation primitives such as `iam:PassRole`, `iam:CreatePolicyVersion`, `iam:AttachRolePolicy`, `iam:PutRolePolicy`, `iam:SetDefaultPolicyVersion`, and `iam:UpdateAssumeRolePolicy`
+- code-execution paths such as `lambda:CreateFunction`, `lambda:UpdateFunctionCode`, and `ec2:RunInstances`
+- public-exposure paths such as `s3:PutBucketPolicy`, `s3:PutBucketAcl`, and `s3:PutObjectAcl`
+- encryption and org-admin risks such as `kms:Decrypt` and `organizations:*`
 
-### Rule data and scoring
-Pasu's local analyzer loads its detection data from package-managed rule files instead of hardcoding everything directly in `analyzer.py`.
+### Medium-risk and context-dependent patterns
 
-Current packaged rule/config files:
-- `app/rules/risky_actions.yaml`
-- `app/rules/scoring.yaml`
-- `app/rules/fix_profiles.yaml`
-- `app/data/aws_catalog.json`
+Pasu also surfaces context-dependent permissions such as:
 
-This makes rule updates safer, easier to review, and easier to extend in later phases.
+- `sts:AssumeRole`
+- `iam:CreateAccessKey`
+- `secretsmanager:GetSecretValue`
+- `ssm:GetParameter`
+- `ec2:DescribeInstances`
+- `rds:CopyDBSnapshot`
 
-### AWS catalog sync foundation
-Pasu now includes a local AWS catalog sync foundation script:
-- `scripts/sync_aws_catalog.py`
+### Structural IAM issues
 
-Current behavior:
-- Uses the AWS Service Authorization Reference as the source of truth
-- Builds a canonical `app/data/aws_catalog.json` snapshot
-- Generates diff reports for review at:
-  - `reports/aws_catalog_diff.json`
-  - `reports/aws_catalog_diff.md`
-- Surfaces `new_unclassified_actions`, `services_with_new_unclassified_actions`, and `count_summary`
+The local analyzer also flags policy structures that are risky even when the individual action list looks normal:
 
-Current scope:
-- Local script workflow is implemented and validated
-- Canonical AWS catalog snapshot is committed to the repo
-- GitHub Actions scheduling is the next step
-- Risk-tier assignment remains review-based, not fully automatic
+- unrestricted resource access
+- `NotAction`
+- `NotResource`
+- sensitive permissions with no `Condition`
+- wildcard service grants such as `s3:*` or `iam:*`
 
 ---
 
-## Roadmap
+## Why Pasu instead of just AWS-native review?
 
-- [x] CLI tool with local + AI analysis
-- [x] PyPI package (`pip install pasu`)
-- [x] More detection rules (S3 public access, cross-account trust)
-- [x] Output formats (`--format json / table / sarif`)
-- [x] `pasu fix` — generate safer proposed policies with manual review guidance
-- [x] Externalized rule/scoring/fix data (`app/rules`, `app/data`)
-- [x] AWS catalog sync + canonical snapshot foundation
-- [x] GitHub Actions scheduled AWS catalog sync + diff workflow
-- [ ] Interactive shell mode
-- [ ] Azure RBAC / Entra ID support
-- [ ] GCP IAM support
-- [ ] Team dashboard with shared reports
+Pasu is optimized for a different workflow:
 
-See [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md) for the fuller roadmap and product direction.
+- **Local-first** — useful before deployment, during code review, or while iterating on policy JSON. Pasu’s product direction explicitly prioritizes local-first usage.
+- **Fast human-readable explanation** — useful when the main problem is understanding what a policy actually allows.
+- **Conservative remediation** — Pasu prefers a reviewable proposed policy plus manual-review notes over overconfident auto-remediation.
+- **Automation-friendly output** — JSON and SARIF are first-class outputs for pipelines and code scanning.
 
 ---
 
-## Why "Pasu"?
+## CI / CD integration
 
-Pasu (파수/把守) is Korean for "guard" or "sentinel" — as in 파수꾼 (guard/watchman). Pasu guards the gates of your cloud infrastructure by making sure only the right permissions exist.
-
----
-
-## CI/CD Integration
-
-### JSON output for scripting
-
-Use `--format json` to pipe results into other tools:
+### JSON output for scripts
 
 ```bash
-# Extract just the risk level
+# Extract the overall risk level
 pasu scan --file policy.json --format json | jq '.escalate.risk_level'
 
-# List all detected risky actions
+# List detected risky actions
 pasu scan --file policy.json --format json | jq '.escalate.detected_actions[]'
 
-# Fail CI if risk level is High
+# Fail CI if the policy is High risk
 RISK=$(pasu scan --file policy.json --format json | jq -r '.escalate.risk_level')
 [ "$RISK" = "High" ] && exit 1 || exit 0
 ```
 
 ### SARIF output for GitHub Code Scanning
 
-Use `--format sarif` to generate a [SARIF v2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/) report that GitHub understands natively:
-
 ```bash
 pasu scan --file policy.json --format sarif > results.sarif
 ```
 
-Upload the `.sarif` file with the `github/codeql-action/upload-sarif` action and findings will appear in the **Security → Code scanning** tab of your repository, with severity levels mapped automatically (`High` → error, `Medium` → warning).
-
-See [examples/github-actions-workflow.yml](examples/github-actions-workflow.yml) for a ready-to-use GitHub Actions workflow.
+Upload the SARIF file with `github/codeql-action/upload-sarif` and findings will appear in **Security → Code scanning**. The repository already includes a ready-to-use GitHub Actions workflow example.
 
 ---
 
-## Development Notes
+## Demo
 
-Recent analyzer refactor work kept the public CLI/API behavior stable while moving rule data out of code. The next backend step is not another large analyzer rewrite — it is automating the AWS catalog sync workflow in GitHub Actions so catalog refresh, diff generation, and human review happen on a schedule.
+![Pasu Demo](docs/demo_pasu_combined.gif)
+
+---
+
+## How it works
+
+Pasu uses a two-step model:
+
+1. **Local detection** — rule-based scanning checks for known dangerous IAM patterns instantly and without network calls.
+2. **Optional AI analysis** — with `--ai`, Pasu asks Claude for deeper explanation and remediation guidance. Local analysis still happens first.
+
+### Packaged rule and data files
+
+Pasu’s local analyzer loads rule and scoring data from package-managed files rather than hardcoding everything in one module. Current packaged files include:
+
+- `app/rules/risky_actions.yaml`
+- `app/rules/scoring.yaml`
+- `app/rules/fix_profiles.yaml`
+- `app/data/aws_catalog.json`
+
+### AWS catalog sync foundation
+
+Pasu also includes a local AWS catalog sync workflow that:
+
+- uses the AWS Service Authorization Reference as the source of truth
+- builds a canonical `app/data/aws_catalog.json` snapshot
+- generates diff reports for review
+- surfaces new unclassified actions for human review instead of auto-assigning risk tiers
+
+---
+
+## Current status
+
+Pasu currently ships with:
+
+- `pasu explain`
+- `pasu escalate`
+- `pasu scan`
+- `pasu fix`
+- local mode with no API key required
+- optional AI mode with Claude
+- JSON and SARIF output
+- GitHub Actions CI/CD
+- PyPI distribution
+- packaged rule/scoring/fix data
+- canonical AWS action catalog snapshot and local sync/diff tooling
+- 159 pytest tests passing
+
+---
+
+## Roadmap
+
+Completed:
+
+- [x] CLI tool with local + AI analysis
+- [x] PyPI package (`pip install pasu`)
+- [x] more detection rules
+- [x] JSON and SARIF output
+- [x] `pasu fix` safer proposed policy generation
+- [x] externalized rule/scoring/fix data
+- [x] AWS catalog sync foundation
+- [x] GitHub Actions scheduled AWS catalog sync + diff workflow
+
+Planned:
+
+- [ ] interactive shell mode
+- [ ] Azure RBAC / Entra ID support
+- [ ] GCP IAM support
+- [ ] team dashboard with shared reports
+
+For the broader product direction, see `docs/PRODUCT_SPEC.md`.
+
+---
+
+## Why “Pasu”?
+
+Pasu (파수/把守) means **guard** or **sentinel** — as in guarding the gate. The name fits the project’s goal: helping you keep dangerous permissions out of your cloud IAM layer.
 
 ---
 
 ## Contributing
 
-Contributions are welcome. Please open an issue first to discuss what you'd like to change.
+Contributions are welcome. Open an issue first to discuss substantial changes.
 
 ## License
 
