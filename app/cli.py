@@ -26,6 +26,7 @@ from app.analyzer import (
     escalate_policy_local,
     explain_policy,
     explain_policy_local,
+    fix_policy_ai,
     fix_policy_local,
     risk_score_label,
 )
@@ -579,7 +580,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
 # ── Fix formatters and handler ────────────────────────────────────────────────
 
 def _fix_to_json(result) -> dict:
-    return {
+    data: dict = {
         "original_risk_level": result.original_risk_level,
         "fixed_risk_level": result.fixed_risk_level,
         "fixed_policy": result.fixed_policy,
@@ -588,13 +589,19 @@ def _fix_to_json(result) -> dict:
         ],
         "manual_review_needed": result.manual_review_needed,
         "status": result.status,
+        "ai_generated": result.ai_generated,
     }
+    if result.ai_generated:
+        data["ai_explanation"] = result.ai_explanation
+        data["ai_disclaimer"] = result.ai_disclaimer
+    return data
 
 
 def _print_fix(result, output_path: str | None, original_score: int, fixed_score: int) -> None:
     orig_code = _risk_color(result.original_risk_level)
     fixed_code = _risk_color(result.fixed_risk_level)
-    print(_header("IAM Policy Fix Report"))
+    header_title = "IAM Policy Fix Report  (AI Mode)" if result.ai_generated else "IAM Policy Fix Report"
+    print(_header(header_title))
     print(
         _section("Risk Level")
         + f"  {_color(result.original_risk_level, _BOLD + orig_code)}"
@@ -604,6 +611,10 @@ def _print_fix(result, output_path: str | None, original_score: int, fixed_score
         _section("Risk Score")
         + f"  {_risk_bar(original_score)}  →  {_risk_bar(fixed_score)}"
     )
+
+    if result.ai_generated and result.ai_disclaimer:
+        print(_section("AI Notice"))
+        print(f"  {_color(result.ai_disclaimer, _CYAN)}")
 
     if result.changes:
         print(_section("Changes Applied"))
@@ -675,6 +686,10 @@ def _print_fix(result, output_path: str | None, original_score: int, fixed_score
         for note in result.manual_review_needed:
             print(f"  • {_color(note, _YELLOW)}")
 
+    if result.ai_generated and result.ai_explanation:
+        print(_section("AI Analysis"))
+        print(f"  {result.ai_explanation}")
+
     print(_section("Proposed Policy"))
     print(_highlight_proposed_policy(result.fixed_policy))
 
@@ -703,9 +718,11 @@ def cmd_fix(args: argparse.Namespace) -> None:
 
     try:
         result = fix_policy_local(policy_json=policy_json)
-        # AI mode: fix_policy_ai() will be wired here in a follow-up task.
-    except ValueError as exc:
-        _handle_error(f"Validation error: {exc}", use_machine)
+        if use_ai:
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            result = fix_policy_ai(policy_json=policy_json, local_result=result, api_key=api_key)
+    except (ValueError, RuntimeError) as exc:
+        _handle_error(f"Fix failed: {exc}", use_machine)
         return
 
     original_score = calculate_risk_score(policy_json)

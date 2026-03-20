@@ -1976,6 +1976,216 @@ class TestCalculateRiskScore:
 
 
 # ---------------------------------------------------------------------------
+# fix --ai tests
+# ---------------------------------------------------------------------------
+
+_LAMBDA_POLICY = json.dumps({
+    "Version": "2012-10-17",
+    "Statement": [{
+        "Sid": "DangerousLambda",
+        "Effect": "Allow",
+        "Action": ["lambda:CreateFunction", "lambda:UpdateFunctionCode"],
+        "Resource": "*",
+    }],
+})
+
+_AI_FIXED_POLICY = {
+    "Version": "2012-10-17",
+    "Statement": [{
+        "Sid": "LambdaReadOnly",
+        "Effect": "Allow",
+        "Action": ["lambda:GetFunction", "lambda:ListFunctions"],
+        "Resource": "arn:aws:lambda:*:123456789012:function:*",
+    }],
+}
+
+_AI_RESPONSE_JSON = json.dumps({
+    "fixed_policy": _AI_FIXED_POLICY,
+    "explanation": "Replaced dangerous Lambda write actions with read-only equivalents.",
+})
+
+
+def _make_mock_anthropic(response_text: str):
+    """Return a mock anthropic.Anthropic class whose messages.create() returns response_text."""
+    mock_client = MagicMock()
+    mock_msg = MagicMock()
+    mock_msg.content[0].text = response_text
+    mock_client.messages.create.return_value = mock_msg
+    mock_cls = MagicMock(return_value=mock_client)
+    return mock_cls, mock_client
+
+
+class TestFixAI:
+    """Tests for fix_policy_ai() and cmd_fix --ai integration."""
+
+    def _local_result(self):
+        from app.analyzer import fix_policy_local
+        return fix_policy_local(_LAMBDA_POLICY)
+
+    # ── fix_policy_ai unit tests ───────────────────────────────────────────
+
+    def test_fix_policy_ai_returns_fixresult_with_ai_generated_true(self):
+        from app.analyzer import fix_policy_ai
+        mock_cls, _ = _make_mock_anthropic(_AI_RESPONSE_JSON)
+        with patch("app.analyzer.anthropic.Anthropic", mock_cls):
+            result = fix_policy_ai(
+                policy_json=_LAMBDA_POLICY,
+                local_result=self._local_result(),
+                api_key="fake-key",
+            )
+        assert result.ai_generated is True
+
+    def test_fix_policy_ai_fixed_policy_comes_from_claude(self):
+        from app.analyzer import fix_policy_ai
+        mock_cls, _ = _make_mock_anthropic(_AI_RESPONSE_JSON)
+        with patch("app.analyzer.anthropic.Anthropic", mock_cls):
+            result = fix_policy_ai(
+                policy_json=_LAMBDA_POLICY,
+                local_result=self._local_result(),
+                api_key="fake-key",
+            )
+        stmt = result.fixed_policy["Statement"][0]
+        assert stmt["Resource"] == "arn:aws:lambda:*:123456789012:function:*"
+        assert "lambda:GetFunction" in stmt["Action"]
+
+    def test_fix_policy_ai_populates_ai_explanation(self):
+        from app.analyzer import fix_policy_ai
+        mock_cls, _ = _make_mock_anthropic(_AI_RESPONSE_JSON)
+        with patch("app.analyzer.anthropic.Anthropic", mock_cls):
+            result = fix_policy_ai(
+                policy_json=_LAMBDA_POLICY,
+                local_result=self._local_result(),
+                api_key="fake-key",
+            )
+        assert "Lambda" in result.ai_explanation
+        assert result.ai_disclaimer != ""
+
+    def test_fix_policy_ai_calls_claude_once(self):
+        from app.analyzer import fix_policy_ai
+        mock_cls, mock_client = _make_mock_anthropic(_AI_RESPONSE_JSON)
+        with patch("app.analyzer.anthropic.Anthropic", mock_cls):
+            fix_policy_ai(
+                policy_json=_LAMBDA_POLICY,
+                local_result=self._local_result(),
+                api_key="fake-key",
+            )
+        mock_client.messages.create.assert_called_once()
+
+    def test_fix_policy_ai_raises_runtime_error_on_api_error(self):
+        import anthropic as anthropic_lib
+        from app.analyzer import fix_policy_ai
+        mock_cls, mock_client = _make_mock_anthropic("")
+        mock_client.messages.create.side_effect = anthropic_lib.APIError(
+            message="quota exceeded", request=MagicMock(), body=None
+        )
+        with patch("app.analyzer.anthropic.Anthropic", mock_cls):
+            with pytest.raises(RuntimeError, match="Claude fix failed"):
+                fix_policy_ai(
+                    policy_json=_LAMBDA_POLICY,
+                    local_result=self._local_result(),
+                    api_key="fake-key",
+                )
+
+    def test_fix_policy_ai_raises_on_invalid_json_response(self):
+        from app.analyzer import fix_policy_ai
+        mock_cls, _ = _make_mock_anthropic("not valid json")
+        with patch("app.analyzer.anthropic.Anthropic", mock_cls):
+            with pytest.raises(RuntimeError, match="invalid JSON"):
+                fix_policy_ai(
+                    policy_json=_LAMBDA_POLICY,
+                    local_result=self._local_result(),
+                    api_key="fake-key",
+                )
+
+    def test_fix_policy_ai_raises_on_missing_fixed_policy_key(self):
+        from app.analyzer import fix_policy_ai
+        bad_response = json.dumps({"explanation": "oops, forgot fixed_policy"})
+        mock_cls, _ = _make_mock_anthropic(bad_response)
+        with patch("app.analyzer.anthropic.Anthropic", mock_cls):
+            with pytest.raises(RuntimeError, match="missing valid 'fixed_policy'"):
+                fix_policy_ai(
+                    policy_json=_LAMBDA_POLICY,
+                    local_result=self._local_result(),
+                    api_key="fake-key",
+                )
+
+    # ── cmd_fix --ai CLI integration tests ────────────────────────────────
+
+    def test_cmd_fix_ai_text_output_shows_ai_mode_header(self, tmp_path):
+        from app.cli import cmd_fix
+        args = argparse.Namespace(
+            file=str(tmp_path / "p.json"), format="text", output=None, ai=True
+        )
+        (tmp_path / "p.json").write_text(_LAMBDA_POLICY)
+        mock_cls, _ = _make_mock_anthropic(_AI_RESPONSE_JSON)
+        env = {"ANTHROPIC_API_KEY": "fake-key"}
+        with patch("app.analyzer.anthropic.Anthropic", mock_cls), \
+             patch.dict("os.environ", env), \
+             _capture_stdout() as buf:
+            cmd_fix(args)
+        assert "AI Mode" in buf.getvalue()
+
+    def test_cmd_fix_ai_text_output_shows_ai_notice(self, tmp_path):
+        from app.cli import cmd_fix
+        args = argparse.Namespace(
+            file=str(tmp_path / "p.json"), format="text", output=None, ai=True
+        )
+        (tmp_path / "p.json").write_text(_LAMBDA_POLICY)
+        mock_cls, _ = _make_mock_anthropic(_AI_RESPONSE_JSON)
+        env = {"ANTHROPIC_API_KEY": "fake-key"}
+        with patch("app.analyzer.anthropic.Anthropic", mock_cls), \
+             patch.dict("os.environ", env), \
+             _capture_stdout() as buf:
+            cmd_fix(args)
+        output = buf.getvalue()
+        assert "AI Notice" in output
+        assert "AI Analysis" in output
+
+    def test_cmd_fix_ai_json_output_has_ai_fields(self, tmp_path):
+        from app.cli import cmd_fix
+        args = argparse.Namespace(
+            file=str(tmp_path / "p.json"), format="json", output=None, ai=True
+        )
+        (tmp_path / "p.json").write_text(_LAMBDA_POLICY)
+        mock_cls, _ = _make_mock_anthropic(_AI_RESPONSE_JSON)
+        env = {"ANTHROPIC_API_KEY": "fake-key"}
+        with patch("app.analyzer.anthropic.Anthropic", mock_cls), \
+             patch.dict("os.environ", env), \
+             _capture_stdout() as buf:
+            cmd_fix(args)
+        data = json.loads(buf.getvalue())
+        assert data["ai_generated"] is True
+        assert "ai_explanation" in data
+        assert "ai_disclaimer" in data
+
+    def test_cmd_fix_ai_json_fixed_policy_is_from_claude(self, tmp_path):
+        from app.cli import cmd_fix
+        args = argparse.Namespace(
+            file=str(tmp_path / "p.json"), format="json", output=None, ai=True
+        )
+        (tmp_path / "p.json").write_text(_LAMBDA_POLICY)
+        mock_cls, _ = _make_mock_anthropic(_AI_RESPONSE_JSON)
+        env = {"ANTHROPIC_API_KEY": "fake-key"}
+        with patch("app.analyzer.anthropic.Anthropic", mock_cls), \
+             patch.dict("os.environ", env), \
+             _capture_stdout() as buf:
+            cmd_fix(args)
+        data = json.loads(buf.getvalue())
+        stmt = data["fixed_policy"]["Statement"][0]
+        assert stmt["Resource"] == "arn:aws:lambda:*:123456789012:function:*"
+
+    def test_cmd_fix_local_mode_has_no_ai_fields_in_text(self, tmp_path):
+        """Local fix (no --ai) must not show AI Mode header or AI Notice."""
+        from app.cli import cmd_fix
+        args = _make_fix_args(tmp_path, _LAMBDA_POLICY, fmt="text")
+        with _capture_stdout() as buf:
+            cmd_fix(args)
+        output = buf.getvalue()
+        assert "AI Mode" not in output
+        assert "AI Notice" not in output
+
+
+# ---------------------------------------------------------------------------
 # Messaging layer distinction tests (Task 3)
 # ---------------------------------------------------------------------------
 

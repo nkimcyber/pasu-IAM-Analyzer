@@ -155,3 +155,18 @@ class FixResult(BaseModel):
         ..., description="Statements that could not be auto-fixed."
     )
     status: str = Field(default="success")
+    ai_generated: bool = Field(
+        default=False,
+        description="True when fixed_policy was produced by an AI model.",
+    )
+    ai_disclaimer: str = Field(
+        default="",
+        description=(
+            "Present when ai_generated is True. Reminds consumers that the "
+            "fixed policy is model-generated and must be reviewed before use."
+        ),
+    )
+    ai_explanation: str = Field(
+        default="",
+        description="Claude's explanation of the changes made (ai_generated mode only).",
+    )
