@@ -33,6 +33,7 @@ classifiers = [
 dev = [
     "pytest",
     "jsonschema",
+    "moto[iam,sts]",
 ]
 
 [project.urls]

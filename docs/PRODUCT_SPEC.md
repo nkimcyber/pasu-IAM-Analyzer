@@ -38,12 +38,17 @@ Pasu should be useful on day one:
 - `pasu explain --file policy.json` — Explain IAM policies in plain English
 - `pasu escalate --file policy.json` — Detect privilege escalation risks
 - `pasu scan --file policy.json` — Combined explain + escalate report
+- `pasu scan --profile <profile>` — Scan IAM roles and users from AWS account
 - `pasu fix --file policy.json` — Generate a safer **proposed policy** (local or AI-powered)
 
 #### Current CLI option support
 - `explain`, `escalate`, `scan`
   - `--ai`
   - `--format text|json|sarif`
+- `scan` with AWS profiles
+  - `--profile <profile_name>`
+  - `--format text|json|sarif`
+  - Output includes Policy ARN for AWS Console navigation
 - `fix`
   - `--ai`
   - `--format text|json`
@@ -71,6 +76,13 @@ Pasu should be useful on day one:
 - `escalate --ai` performs local reviewed-action detection first and skips Claude when no reviewed high-risk actions are found
 - `explain --ai` and AI-backed `scan` use Claude for richer output rather than a local-first fallback
 - **NEW:** `fix --ai` infers policy intent from structure and generates context-aware least-privilege policies with automatic Condition blocks and ARN scoping
+
+#### AWS CLI Profile Scanning (Phase 2)
+- `pasu scan --profile <profile>` scans all IAM roles and users from AWS account
+- Reads credentials from local AWS CLI configuration (`~/.aws/credentials` or `~/.aws/config`)
+- Requires AWS user to have read-only IAM permissions (e.g., `IAMReadOnlyAccess`)
+- All analysis is performed locally; no data is transmitted outside the machine
+- Output includes Policy ARN (e.g., `arn:aws:iam::123456789012:role/RoleName`) for direct AWS Console navigation
 
 #### `pasu fix` improvements (Phase 2 foundation)
 - **Local mode (default):**
@@ -100,7 +112,37 @@ Pasu should be useful on day one:
 
 ---
 
-## 3. Rule and Scoring Architecture
+## 3. Security & Privacy Model
+
+### Local-first data handling
+
+Pasu reads IAM metadata exclusively from the user's local AWS CLI configuration. When scanning AWS accounts:
+
+- **No data transmission:** All IAM metadata processing happens locally on the user's machine
+- **Credentials stay local:** AWS credentials are read from `~/.aws/credentials` or `~/.aws/config` and never transmitted
+- **Read-only operations:** Pasu uses boto3 for read-only IAM API calls only (GetRole, ListRoles, etc.)
+- **No network calls from Pasu:** The only network activity is boto3's communication with AWS IAM API endpoints
+- **User shown in `aws sts get-caller-identity`:** That same AWS user must have read-only IAM permissions
+
+### AI mode exception
+
+`--ai` mode is the only scenario where Pasu transmits data outside the local machine:
+
+- Policy JSON text is sent to Anthropic's Claude API for analysis
+- This is **optional** and only occurs when the user explicitly includes `--ai` flag
+- Default mode (`--ai` not specified) performs all analysis locally
+
+### Security requirements
+
+The AWS user running Pasu must have read-only IAM permissions:
+
+- Recommended: `IAMReadOnlyAccess` managed policy
+- Minimum: permissions to call `iam:List*` and `iam:Get*` operations
+- Pasu does not require write permissions
+
+---
+
+## 4. Rule and Scoring Architecture
 
 Phase 1 moved the local analyzer away from a fully hardcoded rule layout.
 
@@ -147,7 +189,7 @@ Phase 1 moved the local analyzer away from a fully hardcoded rule layout.
 
 ---
 
-## 4. AWS Catalog Sync Foundation
+## 5. AWS Catalog Sync Foundation
 
 Phase 1.5 adds the local foundation for keeping packaged AWS action metadata current.
 
@@ -213,7 +255,7 @@ It does **not** automatically assign new AWS actions into Pasu's high/medium/con
 
 ---
 
-## 5. What `pasu fix` does today
+## 6. What `pasu fix` does today
 
 `pasu fix` is intentionally conservative.
 
@@ -225,70 +267,55 @@ It generates a safer **proposed policy** and explains what still needs review.
   - Example: `lambda:CreateFunction` → `["lambda:GetFunction", "lambda:ListFunctions"]` (read-only)
   - Example: `iam:PassRole` → no safe alternative, provides Condition block guidance
 - Removes reviewed high-risk actions only when safe alternatives exist or when the action can be safely removed
-- Keeps some actions unchanged when no reviewed classification exists, the action is marked not-applicable, or safe removal is not possible
-- Keeps wildcard resources when Pasu cannot safely narrow them without resource-specific context
-- Adds warnings and notes to explain why some broad permissions remain
-- Adds manual-review guidance when auto-fix cannot safely finish the statement
-- Works offline, no API calls required
+- Preserves resource scoping and structure when safe
+- Inserts manual-review notes where automation would be guessing
+- Runs instantly, no API calls required
 
-### AI mode behavior (new in Phase 2)
-- Calls Claude Haiku to analyze the policy intent
-- Infers policy purpose from Statement Sids, action combinations, and resource patterns
-- Generates context-aware least-privilege replacement that:
-  - Preserves inferred intent
-  - Removes all unnecessary permissions
-  - Adds appropriate Condition blocks (e.g., region restrictions, service restrictions)
-  - Scopes wildcard resources to specific ARN patterns
-  - Includes explanatory comments
-- Takes 2-3 seconds per call due to API latency
-- Falls back to local mode on API errors
-- Reports on confidence level of inferred intent (high/medium/low)
+### AI mode behavior
+- Claude receives the original policy JSON
+- Claude analyzes the intent, Sids, action patterns, and resource structure
+- Claude generates a context-aware least-privilege replacement
+- Claude automatically includes appropriate Condition blocks and ARN patterns
+- Claude reports its confidence level for the inferred intent
+- Takes 2–3 seconds per policy
 
-### Important behavior
-The output from `pasu fix` is designed to be:
-- reviewable
-- explicit
-- conservative
-- less misleading than an overconfident "auto-remediation" result
+### Example: local mode
 
-### Current output improvements
-`pasu fix` currently includes:
-- risk level and risk score that use the same scoring basis
-- grouped changes by statement SID
-- human-facing statement numbering using 1-based numbering
-- `Proposed Policy` wording instead of `Fixed Policy`
-- text highlighting for:
-  - `TODO:specify-needed-actions`
-  - risky `Allow + Resource "*"`
-- explanation for why wildcard resources remain
-- explanation for which medium-risk actions remain
-- manual review messages that include:
-  - statement number
-  - `Sid` when present
-  - the next action the user should take
-- **NEW in AI mode:**
-  - Inferred policy intent
-  - Confidence level of inference
-  - Detailed AI analysis explanation
-  - Conditions added (if any)
-  - Resources scoped (if any)
-
----
-
-## 6. Example `pasu fix` behavior
-
-### Local mode example
-```
+```bash
 pasu fix --file policy.json
 ```
 
-A typical `pasu fix` local result may:
+A typical local `pasu fix` result on this input:
+
+```json
+{
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "iam:PassRole",
+        "lambda:CreateFunction",
+        "lambda:UpdateFunctionCode",
+        "sts:AssumeRole"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+May produce output like:
+
+```
+[Proposed policy section: removed actions, changed scope, manual review notes]
+...
 - remove `lambda:CreateFunction` and `lambda:UpdateFunctionCode` (reviewed classifications allow removal)
 - replace with `lambda:GetFunction` and `lambda:ListFunctions` (read-only alternatives)
 - keep `iam:PassRole` (no safe alternative, but provide Condition guidance)
 - keep `sts:AssumeRole`
 - keep `Resource: "*"` when safe narrowing is not possible
 - insert manual-review notes where needed
+```
 
 ### AI mode example
 ```
@@ -370,6 +397,9 @@ Glue risks:
 
 ## 8. Not Yet Built
 
+- CLI filtering and refinement (--min-score, --risk-level)
+- Interactive shell mode
+- OpenAI API support for `--ai` mode
 - Azure support
 - GCP support
 - Trust policy analysis expansion
@@ -427,7 +457,7 @@ Completed:
 - Validated action-only precision for canonical snapshot
 - GitHub Actions workflow for scheduled execution (ready)
 
-### Phase 2 — Intelligent fix and Azure foundation
+### Phase 2 — Intelligent fix, AWS profile scanning, and Azure foundation
 **Status:** In Progress
 
 Completed:
@@ -437,10 +467,15 @@ Completed:
 - ARN pattern scoping in AI fix
 - Local fix mode with fallback guidance
 - Comprehensive testing (mock + real API)
+- AWS CLI profile scanning (`pasu scan --profile <profile>`)
+- Policy ARN output for AWS Console navigation
+- Security & Privacy documentation
 - README and PRODUCT_SPEC updates
 
 Next:
 - Expand SAFE_ALTERNATIVES to 40+ patterns (more AWS services)
+- Basic CLI filtering (`--min-score`, `--risk-level`)
+- OpenAI API support for `--ai` mode (alongside Claude)
 - Azure RBAC / Entra ID analysis foundation
 - Better workflow support for team usage
 - Shared reporting and notifications
@@ -478,6 +513,9 @@ The public CLI should solve real user problems before broader platform ambitions
 ### 8. AI as optional enhancement, not replacement
 AI should improve the local experience, not be required. All core functionality works without API keys.
 
+### 9. Security and privacy by default
+Local-mode operations should involve no data transmission. AWS credentials stay on the user's machine. Only explicit opt-in features (like `--ai`) transmit data outside the local environment.
+
 ---
 
 ## 12. Coding Standards
@@ -501,6 +539,7 @@ This public specification is intentionally focused on:
 - technical direction
 - output quality
 - safety principles
+- security and privacy model
 
 Additional current notes:
 - `app/data/aws_catalog.json` is now a real canonical snapshot, not just a placeholder layer.
@@ -509,4 +548,6 @@ Additional current notes:
 - Risk-tier assignment for new AWS actions remains intentionally human-reviewed.
 - SAFE_ALTERNATIVES is the foundation for all fix remediation and can be expanded without code changes.
 - `pasu fix --ai` uses Claude Haiku for cost-efficient intent inference; API calls fallback to local mode on error.
+- AWS CLI profile scanning reads local credentials and performs all analysis locally; no data is transmitted to Pasu infrastructure or external services beyond AWS IAM API calls.
+- Policy ARN output enables direct AWS Console navigation for role/user management.
 - Some API metadata in the codebase still carries legacy `IAM Analyzer` naming/version fields and should be aligned with Pasu branding before the next release to avoid documentation drift.

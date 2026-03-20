@@ -545,36 +545,141 @@ def cmd_escalate(args: argparse.Namespace) -> None:
         _print_escalate(result, policy_json=policy_json)
 
 
-def cmd_scan(args: argparse.Namespace) -> None:
-    use_machine = args.format != "text"
+def _run_scan_on_policy(
+    policy_json: str,
+    policy_label: str,
+    use_machine: bool,
+    output_format: str,
+    policy_arn: str = "",
+) -> dict | None:
+    """Run the full scan pipeline on a single policy JSON string.
+
+    Args:
+        policy_json: IAM policy document as a JSON string.
+        policy_label: Human-readable label for output headers (e.g. file path or
+            policy name collected from AWS).
+        use_machine: True when output format is json or sarif.
+        output_format: One of 'text', 'json', or 'sarif'.
+        policy_arn: Constructed ARN for the policy resource. Empty string when
+            scanning from a local file (no account context) or when STS lookup
+            failed during profile-mode collection.
+
+    Returns:
+        Scan result dict when output_format is 'json', else None.
+    """
     try:
-        policy_json = _load_policy(args.file)
+        explain_result = explain_policy_local(policy_json=policy_json)
+        escalate_result = escalate_policy_local(policy_json=policy_json)
+        escalate_result.risk_level = risk_score_label(escalate_result.risk_score)
+        need_findings = output_format in ("json", "sarif")
+        rule_findings = analyze_policy_rules(policy_json) if need_findings else []
+    except ValueError as exc:
+        _handle_error(f"Validation error: {exc}", use_machine)
+        return None
+    except RuntimeError as exc:
+        _handle_error(str(exc), use_machine)
+        return None
+
+    if output_format == "json":
+        result = _scan_to_json(explain_result, escalate_result, rule_findings)
+        result["policy_label"] = policy_label
+        if policy_arn:
+            result["policy_arn"] = policy_arn
+        return result
+    if output_format == "sarif":
+        print(json.dumps(_build_sarif(policy_label, rule_findings, escalate_result), indent=2))
+        return None
+    # text
+    print(_color(f"\n{'=' * 60}", _CYAN))
+    print(_color(f"  Policy: {policy_label}", _BOLD))
+    if policy_arn:
+        print(_color(f"  Policy ARN: {policy_arn}", _BOLD))
+    print(_color(f"{'=' * 60}", _CYAN))
+    _print_scan(explain_result, escalate_result, policy_json=policy_json)
+    return None
+
+
+def cmd_scan(args: argparse.Namespace) -> None:
+    """Handle the 'scan' command in both file and profile modes.
+
+    File mode:  pasu scan --file policy.json [--format FORMAT]
+    Profile mode: pasu scan --profile PROFILE [--role ROLE_ARN] [--format FORMAT]
+    """
+    use_machine = args.format != "text"
+    profile: str | None = getattr(args, "profile", None)
+    role_arn: str | None = getattr(args, "role", None)
+    file_arg: str | None = getattr(args, "file", None)
+
+    # Mutual exclusion: --file and --profile cannot be combined.
+    if file_arg and profile:
+        _handle_error(
+            "--file and --profile are mutually exclusive. "
+            "Provide a file path or an AWS profile, not both.",
+            use_machine,
+        )
+        return
+
+    # At least one source must be specified.
+    if not file_arg and not profile:
+        _handle_error(
+            "Provide either --file <path> or --profile <profile_name>.",
+            use_machine,
+        )
+        return
+
+    # ── Profile mode ──────────────────────────────────────────────────────────
+    if profile:
+        from app.aws_collector import collect_account_policies
+
+        try:
+            policies = collect_account_policies(
+                profile_name=profile, role_arn=role_arn
+            )
+        except RuntimeError as exc:
+            _handle_error(str(exc), use_machine)
+            return
+
+        if not policies:
+            if use_machine:
+                print(json.dumps({"policies": [], "status": "success", "message": "No policies found."}, indent=2))
+            else:
+                print(_color("No IAM policies found in the account.", _YELLOW))
+            return
+
+        if args.format == "json":
+            results: list[dict] = []
+            for policy in policies:
+                result = _run_scan_on_policy(
+                    policy.policy_json,
+                    policy.name,
+                    use_machine,
+                    args.format,
+                    policy_arn=policy.policy_arn,
+                )
+                if result is not None:
+                    results.append(result)
+            print(json.dumps({"policies": results, "status": "success"}, indent=2))
+        else:
+            for policy in policies:
+                _run_scan_on_policy(
+                    policy.policy_json,
+                    policy.name,
+                    use_machine,
+                    args.format,
+                    policy_arn=policy.policy_arn,
+                )
+        return
+
+    # ── File mode ─────────────────────────────────────────────────────────────
+    try:
+        policy_json = _load_policy(file_arg)  # type: ignore[arg-type]
     except (FileNotFoundError, ValueError) as exc:
         _handle_error(str(exc), use_machine)
         return
 
-    try:
-        explain_result = explain_policy_local(policy_json=policy_json)
-        escalate_result = escalate_policy_local(policy_json=policy_json)
-
-        escalate_result.risk_level = risk_score_label(escalate_result.risk_score)
-        
-        need_findings = args.format in ("json", "sarif")
-        rule_findings = analyze_policy_rules(policy_json) if need_findings else []
-        
-    except ValueError as exc:
-        _handle_error(f"Validation error: {exc}", use_machine)
-        return
-    except RuntimeError as exc:
-        _handle_error(str(exc), use_machine)
-        return
-
-    if args.format == "json":
-        print(json.dumps(_scan_to_json(explain_result, escalate_result, rule_findings), indent=2))
-    elif args.format == "sarif":
-        print(json.dumps(_build_sarif(args.file, rule_findings, escalate_result), indent=2))
-    else:
-        _print_scan(explain_result, escalate_result, policy_json=policy_json)
+    result = _run_scan_on_policy(policy_json, file_arg, use_machine, args.format)
+    if args.format == "json" and result is not None:
+        print(json.dumps(result, indent=2))
 
 
 # ── Fix formatters and handler ────────────────────────────────────────────────
@@ -805,8 +910,30 @@ def main() -> None:
         "scan",
         help="Run both explain and escalate and show a combined report.",
     )
-    p_scan.add_argument("--file", required=True, metavar="FILE",
-                        help="Path to the IAM policy JSON file.")
+    p_scan.add_argument(
+        "--file",
+        default=None,
+        metavar="FILE",
+        help="Path to the IAM policy JSON file. Mutually exclusive with --profile.",
+    )
+    p_scan.add_argument(
+        "--profile",
+        default=None,
+        metavar="PROFILE",
+        help=(
+            "AWS CLI profile name. When given, IAM policies are collected directly "
+            "from the account and scanned in batch. Mutually exclusive with --file."
+        ),
+    )
+    p_scan.add_argument(
+        "--role",
+        default=None,
+        metavar="ROLE_ARN",
+        help=(
+            "IAM role ARN to assume via STS before collecting policies. "
+            "Only valid together with --profile (cross-account scanning)."
+        ),
+    )
     p_scan.add_argument("--format", **_format_kwargs)
     p_scan.set_defaults(func=cmd_scan)
 
